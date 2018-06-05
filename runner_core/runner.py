@@ -89,13 +89,17 @@ def run(program, arguments, stdin_f=None):
         stdinf = open(stdin_f, 'r')
 
     null_out = open('/dev/null', 'w')
-    u = subprocess.call(cmdline, stdin=stdinf, stdout=null_out, stderr=null_out)
+    subprocess.call(cmdline, stdin=stdinf, stdout=null_out, stderr=null_out)
+    data = open(xmlout.name, 'r').read()
+    return data
+    """
     st = stack_from_xml(xmlout.name)
     res = True
     if st == None:
-        res = True
+        res = False
         st = []
     return (res,"-".join(st))
+    """
 
 if __name__ == '__main__':
     # Some tests. 
