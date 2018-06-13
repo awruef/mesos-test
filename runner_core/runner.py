@@ -1,5 +1,7 @@
 import subprocess
 import tempfile
+import shutil
+import os
 import xml.etree.ElementTree as ET
 
 def stack_frame_from_xml(xml_stack):
@@ -34,15 +36,14 @@ def stack_frame_from_xml(xml_stack):
             st.append(fullid)
     return st
 
-def stack_from_xml(filename):
-    tree = None
+def stack_from_xml(data):
+    root = None
     try:
-        tree = ET.parse(filename)
+        root = ET.fromstring(data)
     # Sometimes, Valgrind got interrupted?
     except ET.ParseError:
-        print "Bad valgrind file for {}".format(filename)
         return None
-    root = tree.getroot()
+    #root = tree.getroot()
     # Find the first error and get that stack.
     errors = {}
     xml_errors = root.findall('error')
@@ -89,17 +90,10 @@ def run(program, arguments, stdin_f=None):
         stdinf = open(stdin_f, 'r')
 
     null_out = open('/dev/null', 'w')
+    # Run the full command in a Docker image. 
     subprocess.call(cmdline, stdin=stdinf, stdout=null_out, stderr=null_out)
-    data = open(xmlout.name, 'r').read()
+    data = open("{}".format(xmlout.name), 'r').read()
     return data
-    """
-    st = stack_from_xml(xmlout.name)
-    res = True
-    if st == None:
-        res = False
-        st = []
-    return (res,"-".join(st))
-    """
 
 if __name__ == '__main__':
     # Some tests. 
