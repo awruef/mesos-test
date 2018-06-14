@@ -1,6 +1,7 @@
 import subprocess
 import tempfile
 import shutil
+import stat
 import os
 import xml.etree.ElementTree as ET
 
@@ -80,22 +81,71 @@ def run(program, arguments, stdin_f=None):
     where the first boolean is whether or not there was a fault, and 
     the second string is the call stack. 
     """
-    xmlout = tempfile.NamedTemporaryFile()
-    # Put together the command line.  
-    cmdline = [ 'valgrind', '--xml=yes', '--xml-file={}'.format(xmlout.name) ] 
-    cmdline.append(program)
-    cmdline.extend(arguments)
-    stdinf = None
-    if stdin_f != None:
-        stdinf = open(stdin_f, 'r')
+    # Create a temporary directory where job-related data will be stored. 
+    tempdir = tempfile.mkdtemp()
 
+    # First, we need to go through and find file URIs in 'arguments', and 
+    # make them available in the Docker container. 
+    real_program = program
+    if program[:7] == "file://":
+        p = program[7:]
+        pbase = os.path.basename(p)
+        shutil.copy(p, "{0}/{1}".format(tempdir, pbase))
+        real_program = "/sandbox/{}".format(pbase)
+
+    converted_arguments = []
+    for a in arguments:
+        if a[:7] == "file://":
+            b = a[7:]
+            bbase = os.path.basename(b)
+            shutil.copy(b, "{0}/{1}".format(tempdir, bbase))
+            converted_arguments.append("/sandbox/{1}".format(bbase))
+        else:
+            converted_arguments.append(a)
+
+    if stdin_f != None:
+        if stdin_f[:7] == "file://":
+            b = stdin_f[7:]
+            bbase = os.path.basename(b)
+            shutil.copy(b, "{0}/{1}".format(tempdir, bbase))
+            stdin_f = "/sandbox/{0}".format(bbase)
+
+    # Then, create the Docker command line.
+    docker_cmdline = ["docker", "run", "--rm", "--user", "1000"]
+    docker_cmdline.append("-v")
+    docker_cmdline.append("{}:/sandbox".format(tempdir))
+    docker_cmdline.append("grinder")
+
+    # Then, create the Valgrind command line.
+    valgrind_cmdline = ["/usr/bin/valgrind", "--xml=yes", "--xml-file=/sandbox/out.xml"]
+    valgrind_cmdline.append(real_program)
+
+    for a in arguments:
+        valgrind_cmdline.append(a)
+   
+    valgrind_cmd = " ".join(valgrind_cmdline)
+    if stdin_f != None:
+        valgrind_cmd = "{0} < {1}".format(valgrind_cmd, stdin_f)
+
+    runsh = open("{}/run.sh".format(tempdir), "w")
+    runsh.write("#!/bin/bash\n{}\n".format(valgrind_cmd))
+    runsh.close()
+    os.chmod("{}/run.sh".format(tempdir), stat.S_IREAD|stat.S_IEXEC)
+
+    # Then, jam them together and run them. 
+    docker_cmdline.append("/sandbox/run.sh") 
     null_out = open('/dev/null', 'w')
-    # Run the full command in a Docker image. 
-    subprocess.call(cmdline, stdin=stdinf, stdout=null_out, stderr=null_out)
-    data = open("{}".format(xmlout.name), 'r').read()
+    #subprocess.call(docker_cmdline, stdout=null_out, stderr=null_out)
+    subprocess.call(docker_cmdline)
+
+    # Then, read the XML data file output. 
+    data = open("{}/out.xml".format(tempdir), 'r').read()
+
+    # Tear down the temporary directory structure now that we don't need it.
+    shutil.rmtree(tempdir)
     return data
 
 if __name__ == '__main__':
     # Some tests. 
-    rv = run("/home/andrew/code/binutils-2.26-new/binutils/cxxfilt", [], "./afl/8/outdir/crashes/id:000417,sig:11,src:005525,op:havoc,rep:8")
+    rv = run("file:///home/andrew/code/binutils-2.26-new/binutils/cxxfilt", [], "file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000417,sig:11,src:005525,op:havoc,rep:8")
     print rv
