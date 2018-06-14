@@ -5,6 +5,7 @@ import csv
 import sys
 import os
 
+from runner_core.runner import stack_from_xml
 import mesos.interface
 from mesos.interface import mesos_pb2
 from mesos.scheduler import MesosSchedulerDriver
@@ -38,8 +39,11 @@ def get_tasks(data_dir):
         program = p[1]
         if program[0] != os.path.sep:
             program = os.path.abspath("{0}/{1}".format(data_dir,program))
- 
-        program_args = p[2].split(" ")
+
+        if len(p[2]) > 0:
+            program_args = p[2].split(" ")
+        else:
+            program_args = []
         for i in inputs:
             input_filename = i[0]
             if input_filename[0] != os.path.sep:
@@ -67,6 +71,19 @@ class TestCaseScheduler(mesos.interface.Scheduler):
         self.tasksLaunched = 0
         self.taskData = {}
         self.results = []
+
+    def _finished(self, state):
+        return state == mesos_pb2.TASK_FINISHED
+
+    def _failed(self, state):
+        r = False
+        if state == mesos_pb2.TASK_FAILED:
+            r = True
+        elif state == mesos_pb2.TASK_ERROR:
+            r = True
+        elif state == mesos_pb2.TASK_KILLED:
+            r = True
+        return r
 
     def registered(self, driver, frameworkId, masterInfo):
         print "Registered with framework ID %s" % frameworkId.value
@@ -106,13 +123,24 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                 task.name = "task %d" % tid
                 task_data = {}
                 task_data['taskid'] = workunit[0]
-                task_data['program'] = workunit[1]
+                task_data['program'] = "file://{}".format(workunit[1])
                 task_data['program_args'] = workunit[2]
-                task_data['input_filename'] = workunit[3]
+                task_data['input_filename'] = "file://{}".format(workunit[3])
                 task_data['do_read'] = workunit[4]
                 task_data['stdin'] = workunit[5]
                 task.data = json.dumps(task_data)
                 task.executor.MergeFrom(self.executor)
+                """
+                commandinfo = mesos_pb2.CommandInfo()
+
+                proginfo = commandinfo.uris.add()
+                proginfo.value = "file://{}".format(workunit[1])
+
+                inputinfo = commandinfo.uris.add()
+                inputinfo.value = "file://{}".format(workunit[3])
+
+                task.command.MergeFrom(commandinfo)
+                """
 
                 cpus.name = "cpus"
                 cpus.type = mesos_pb2.Value.SCALAR
@@ -136,30 +164,40 @@ class TestCaseScheduler(mesos.interface.Scheduler):
 
     def statusUpdate(self, driver, update):
         # First case, maybe the task is finished? 
-        if update.state == mesos_pb2.TASK_FINISHED:
-            print "A task finished"
+        if self._finished(update.state):
             results = update.data
-            print results
-            self.results.append(True)
-
+            stack = stack_from_xml(results)
+            self.results.append(stack)
+        
         # If the task was killed or was lost or failed, we should re-queue it.
+        if self._failed(update.state):
+            print "something failed!"
+            print update
 
         # Maybe, we have all the results?
         if len(self.results) == self.taskNum:
             print "Got all the results"
+            for r in self.results:
+                print r
             driver.stop()
 
         return
 
     def frameworkMessage(self, driver, executorId, slaveId, message):
-        print "got a framework message"
-
         return
 
 def main(args):
     # First, read the data we need to produce the task list. 
     task_list = [] # A list of commands to run of the form (seq,command,args,input,stdin)
     task_list = get_tasks(args.data_dir)
+
+    """
+    container = mesos_pb2.ContainerInfo()
+    docker_container = mesos_pb2.ContainerInfo.DockerInfo()
+    docker_container.image = "grinder"
+    container.type = mesos_pb2.ContainerInfo.DOCKER
+    container.docker.MergeFrom(docker_container)
+    """
 
     # Get the path to our executor
     executor_path = os.path.abspath("./executor")
@@ -169,6 +207,7 @@ def main(args):
     executor.executor_id.value = "test-case-executor"
     executor.command.value = executor_path
     executor.name = "Test case repeater"
+    #executor.container.MergeFrom(container)
 
     framework = mesos_pb2.FrameworkInfo()
     framework.user = "" # Have Mesos fill in the current user.
@@ -182,6 +221,7 @@ def main(args):
         status = 0
     else:
         status = 1
+    
     return status
 
 if __name__ == '__main__':

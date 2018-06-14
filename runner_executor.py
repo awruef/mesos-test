@@ -16,15 +16,13 @@ class TestCaseExecutor(mesos.interface.Executor):
     done. I don't know if we need that, though. 
     """
     def launchTask(self, d, t):
-        # Create a thread to run the task. Tasks should always be run in new
-        # threads or processes, rather than inside launchTask itself.
         def run_task(driver,task):
+            # Tell everyone we've picked up and are running the task. 
             update = mesos_pb2.TaskStatus()
             update.task_id.value = task.task_id.value
             update.state = mesos_pb2.TASK_RUNNING
             driver.sendStatusUpdate(update)
 
-            # This is where one would perform the requested task.
             task_data = json.loads(task.data)
             program = task_data['program']
             args = task_data['program_args']
@@ -39,7 +37,10 @@ class TestCaseExecutor(mesos.interface.Executor):
             if is_stdin:
                 stdindata = indata
             else:
-                args.append(indata)
+                if len(args) > 0:
+                    args.append(indata)
+                else:
+                    args = [indata]
 
             xmldata = run(program, args, stdindata)
 
