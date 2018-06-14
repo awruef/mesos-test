@@ -127,8 +127,9 @@ def run(program, arguments, stdin_f=None):
     if stdin_f != None:
         valgrind_cmd = "{0} < {1}".format(valgrind_cmd, stdin_f)
 
+    timeout_cmd = "timeout 5m {}".format(valgrind_cmd)
     runsh = open("{}/run.sh".format(tempdir), "w")
-    runsh.write("#!/bin/bash\n{}\n".format(valgrind_cmd))
+    runsh.write("#!/bin/bash\n{}\n".format(timeout_cmd))
     runsh.close()
     os.chmod("{}/run.sh".format(tempdir), stat.S_IREAD|stat.S_IEXEC)
 

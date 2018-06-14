@@ -41,13 +41,23 @@ class TestCaseExecutor(mesos.interface.Executor):
                     args.append(indata)
                 else:
                     args = [indata]
-
-            xmldata = run(program, args, stdindata)
+            try:
+                xmldata = run(program, args, stdindata)
+            except:
+                update = mesos_pb2.TaskStatus()
+                update.task_id.value = task.task_id.value
+                update.state = mesos_pb2.TASK_FAILED
+                driver.sendStatusUpdate(update)
+                return
 
             update = mesos_pb2.TaskStatus()
             update.task_id.value = task.task_id.value
             update.state = mesos_pb2.TASK_FINISHED
-            update.data = xmldata
+            outdata = {}
+            outdata['hash'] = task_data['program_id']
+            outdata['inputfile'] = task_data['input_filename']
+            outdata['stack'] = xmldata
+            update.data = json.dumps(outdata)
             driver.sendStatusUpdate(update)
 
         thread = threading.Thread(target=run_task,args=(d,t))
