@@ -31,6 +31,7 @@ class TestCaseExecutor(mesos.interface.Executor):
             argslist = []
             finished_tasks = []
             for task_data in task_data_list:
+                program = task_data['program']
                 args = task_data['program_args']
                 indata = task_data['input_filename']
                 is_stdin = task_data['stdin']
