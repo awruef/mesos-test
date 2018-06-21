@@ -58,19 +58,22 @@ def get_tasks(data_dir):
                 is_stdin = False
             else:
                 is_stdin = True
-            results.append((taskid,program,program_args,input_filename,do_read,is_stdin))
+            results.append((taskid,program,program_args,input_filename,do_read,is_stdin,program_id))
             taskid = taskid + 1
     return results
 
 
 class TestCaseScheduler(mesos.interface.Scheduler):
-    def __init__(self, tasks, executor):
+    def __init__(self, tasks, output, executor):
         self.tasks = tasks
         self.taskNum = len(tasks)
         self.executor = executor
         self.tasksLaunched = 0
-        self.taskData = {}
+        #self.taskData = {}
         self.results = []
+        self.outfile = open(output, 'w')
+        self.outwriter = csv.writer(self.outfile)
+        self.outwriter.writerow(["program_hash","input_file","result"])
 
     def _finished(self, state):
         return state == mesos_pb2.TASK_FINISHED
@@ -109,7 +112,6 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                 # Schedule a task. 
                 tid = self.tasksLaunched
                 self.tasksLaunched += 1
-                workunit = self.tasks.pop()
 
                 print "Launching task %d using offer %s" \
                       % (tid, offer.id.value)
@@ -121,14 +123,24 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                 task.task_id.value = str(tid)
                 task.slave_id.value = offer.slave_id.value
                 task.name = "task %d" % tid
-                task_data = {}
-                task_data['taskid'] = workunit[0]
-                task_data['program'] = "file://{}".format(workunit[1])
-                task_data['program_args'] = workunit[2]
-                task_data['input_filename'] = "file://{}".format(workunit[3])
-                task_data['do_read'] = workunit[4]
-                task_data['stdin'] = workunit[5]
-                task.data = json.dumps(task_data)
+                task_data_list = []
+                for i in range(0,10):
+                    if len(self.tasks) == 0:
+                        continue
+
+                    workunit = self.tasks.pop()
+                    task_data = {}
+                    task_data['taskid'] = workunit[0]
+                    task_data['program'] = "file://{}".format(workunit[1])
+                    task_data['program_args'] = workunit[2]
+                    task_data['input_filename'] = "file://{}".format(workunit[3])
+                    task_data['do_read'] = workunit[4]
+                    task_data['stdin'] = workunit[5]
+                    task_data['program_id'] = workunit[6]
+                    task_data_list.append(task_data)
+                    #self.taskData[task.task_id.value] = workunit
+
+                task.data = json.dumps(task_data_list)
                 task.executor.MergeFrom(self.executor)
                 """
                 commandinfo = mesos_pb2.CommandInfo()
@@ -148,9 +160,9 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                 mem.name = "mem"
                 mem.type = mesos_pb2.Value.SCALAR
                 mem.scalar.value = 512
-
+                
+	
                 assigned_tasks.append(task)
-                self.taskData[task.task_id.value] = (offer.slave_id, task.executor.executor_id)
 
                 # This is how much we used. 
                 remainingCpus = remainingCpus - 1
@@ -165,20 +177,23 @@ class TestCaseScheduler(mesos.interface.Scheduler):
     def statusUpdate(self, driver, update):
         # First case, maybe the task is finished? 
         if self._finished(update.state):
-            results = update.data
-            stack = stack_from_xml(results)
-            self.results.append(stack)
+            results = json.loads(update.data)
+            for result in results:
+                stack = stack_from_xml(result['stack'])
+                if stack == None:
+                    stack = "-nocrash-"
+                self.outwriter.writerow([result['hash'], result['inputfile'], "-".join(stack)])
+                self.results.append(stack)
         
         # If the task was killed or was lost or failed, we should re-queue it.
         if self._failed(update.state):
             print "something failed!"
             print update
+            driver.stop()
 
         # Maybe, we have all the results?
         if len(self.results) == self.taskNum:
             print "Got all the results"
-            for r in self.results:
-                print r
             driver.stop()
 
         return
@@ -215,7 +230,7 @@ def main(args):
     framework.checkpoint = True
     framework.principal = "test-case-repeater"
 
-    driver = MesosSchedulerDriver(TestCaseScheduler(task_list, executor), framework, args.controller, 1)
+    driver = MesosSchedulerDriver(TestCaseScheduler(task_list, args.output, executor), framework, args.controller, 1)
     status = None
     if driver.run() == mesos_pb2.DRIVER_STOPPED:
         status = 0
@@ -228,5 +243,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('framework')
     parser.add_argument('data_dir', type=str, help="Data directory")
     parser.add_argument('controller', type=str, help="Controller URI")
+    parser.add_argument('output', type=str, help="Output file")
     args = parser.parse_args()
     sys.exit(main(args))

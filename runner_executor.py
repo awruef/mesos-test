@@ -3,7 +3,8 @@
 import sys
 import json
 import threading
-from runner_core.runner import run
+import copy
+from runner_core.runner import run,run2
 
 import mesos.interface
 from mesos.interface import mesos_pb2
@@ -23,31 +24,46 @@ class TestCaseExecutor(mesos.interface.Executor):
             update.state = mesos_pb2.TASK_RUNNING
             driver.sendStatusUpdate(update)
 
-            task_data = json.loads(task.data)
-            program = task_data['program']
-            args = task_data['program_args']
-            indata = task_data['input_filename']
-            is_stdin = task_data['stdin']
-            do_read = task_data['do_read']
+            task_data_list = json.loads(task.data)
+            failed_tasks = []
+            finished_tasks = []
+            program = None
+            argslist = []
+            finished_tasks = []
+            for task_data in task_data_list:
+                args = task_data['program_args']
+                indata = task_data['input_filename']
+                is_stdin = task_data['stdin']
+                do_read = task_data['do_read']
 
-            if do_read:
-                indata = open(indata, 'r').read()
+                if do_read:
+                    indata = open(indata, 'r').read()
 
-            stdindata = None
-            if is_stdin:
-                stdindata = indata
-            else:
-                if len(args) > 0:
-                    args.append(indata)
+                stdindata = None
+                if is_stdin:
+                    stdindata = indata
                 else:
-                    args = [indata]
+                    if len(args) > 0:
+                        args.append(indata)
+                    else:
+                        args = [indata]
 
-            xmldata = run(program, args, stdindata)
+                outdata = {}
+                outdata['hash'] = task_data['program_id']
+                outdata['inputfile'] = task_data['input_filename']
+                outdata['stack'] = ""
+                argslist.append((args, stdindata)) 
+                finished_tasks.append(outdata)
 
+            results = run2(program, argslist)
+
+            for i in range(0, len(results)):
+                finished_tasks[i]['stack'] = results[i]
+             
             update = mesos_pb2.TaskStatus()
             update.task_id.value = task.task_id.value
             update.state = mesos_pb2.TASK_FINISHED
-            update.data = xmldata
+            update.data = json.dumps(finished_tasks)
             driver.sendStatusUpdate(update)
 
         thread = threading.Thread(target=run_task,args=(d,t))

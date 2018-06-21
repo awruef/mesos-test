@@ -73,6 +73,83 @@ def stack_from_xml(data):
         else:
             return errors[ekeys[-1]]
 
+def run2(program, arguments_list):
+    """
+    Take program and a list of arguments and stdins, run them ALL
+    sequentially under the SAME docker container. 
+    """
+    # Create a temporary directory where job-related data will be stored. 
+    tempdir = tempfile.mkdtemp()
+    # First, we need to go through and find file URIs in 'arguments', and 
+    # make them available in the Docker container. 
+    real_program = program
+    if program[:7] == "file://":
+        p = program[7:]
+        pbase = os.path.basename(p)
+        shutil.copy(p, "{0}/{1}".format(tempdir, pbase))
+        real_program = "/sandbox/{}".format(pbase)
+    
+    cmdlines = []
+    idx = 0
+    for (arguments,stdin_f) in arguments_list:
+        converted_arguments = []
+        for a in arguments:
+            if a[:7] == "file://":
+                b = a[7:]
+                bbase = os.path.basename(b)
+                shutil.copy(b, "{0}/{1}{2}".format(tempdir, bbase, idx))
+                converted_arguments.append("/sandbox/{1}{2}".format(bbase, idx))
+            else:
+                converted_arguments.append(a)
+
+        if stdin_f != None:
+            if stdin_f[:7] == "file://":
+                b = stdin_f[7:]
+                bbase = os.path.basename(b)
+                shutil.copy(b, "{0}/{1}{2}".format(tempdir, bbase, idx))
+                stdin_f = "/sandbox/{0}{1}".format(bbase, idx)
+        valgrind_cmdline = ["/usr/bin/valgrind", "--xml=yes", "--xml-file=/sandbox/out{}.xml".format(idx)]
+        valgrind_cmdline.append(real_program)
+        for a in converted_arguments:
+            valgrind_cmdline.append(a)
+   
+        valgrind_cmd = " ".join(valgrind_cmdline)
+        if stdin_f != None:
+            valgrind_cmd = "{0} < {1}".format(valgrind_cmd, stdin_f)
+
+        timeout_cmd = "timeout 5m {}".format(valgrind_cmd)
+        cmdlines.append(timeout_cmd) 
+       
+        idx = idx + 1
+    # Write all the cmdlines out into the run.sh file. 
+    runsh = open("{}/run.sh".format(tempdir), "w")
+    runsh.write("#!/bin/bash\n")
+    for l in cmdlines:
+        runsh.write("{}\n".format(l))
+    runsh.write("exit 0\n")
+    runsh.close()
+    os.chmod("{}/run.sh".format(tempdir), stat.S_IREAD|stat.S_IEXEC)
+
+    # Run run.sh under docker
+    docker_cmdline = ["docker", "run", "--rm", "--user", "1000"]
+    docker_cmdline.append("-v")
+    docker_cmdline.append("{}:/sandbox".format(tempdir))
+    docker_cmdline.append("grinder")
+    docker_cmdline.append("/sandbox/run.sh") 
+    while True:
+        result = subprocess.call(docker_cmdline)
+        if result == 0:
+            break
+
+    # Gather up all the produced XML files and return them in order. 
+    datas = []
+    for i in range(0, idx):
+        data = open("{0}/out{1}.xml".format(tempdir, i), 'r').read()
+        datas.append(data)
+
+    shutil.rmtree(tempdir)
+    return datas
+ 
 def run(program, arguments, stdin_f=None):
     """
     Take program and arguments, run under valgrind. Parse the error 
@@ -120,15 +197,16 @@ def run(program, arguments, stdin_f=None):
     valgrind_cmdline = ["/usr/bin/valgrind", "--xml=yes", "--xml-file=/sandbox/out.xml"]
     valgrind_cmdline.append(real_program)
 
-    for a in arguments:
+    for a in converted_arguments:
         valgrind_cmdline.append(a)
    
     valgrind_cmd = " ".join(valgrind_cmdline)
     if stdin_f != None:
         valgrind_cmd = "{0} < {1}".format(valgrind_cmd, stdin_f)
 
+    timeout_cmd = "timeout 5m {}".format(valgrind_cmd)
     runsh = open("{}/run.sh".format(tempdir), "w")
-    runsh.write("#!/bin/bash\n{}\n".format(valgrind_cmd))
+    runsh.write("#!/bin/bash\n{}\n".format(timeout_cmd))
     runsh.close()
     os.chmod("{}/run.sh".format(tempdir), stat.S_IREAD|stat.S_IEXEC)
 
@@ -136,7 +214,8 @@ def run(program, arguments, stdin_f=None):
     docker_cmdline.append("/sandbox/run.sh") 
     null_out = open('/dev/null', 'w')
     #subprocess.call(docker_cmdline, stdout=null_out, stderr=null_out)
-    subprocess.call(docker_cmdline)
+    subprocess.call(docker_cmdline, stdout=null_out)
+    #subprocess.call(docker_cmdline)
 
     # Then, read the XML data file output. 
     data = open("{}/out.xml".format(tempdir), 'r').read()
@@ -147,5 +226,6 @@ def run(program, arguments, stdin_f=None):
 
 if __name__ == '__main__':
     # Some tests. 
-    rv = run("file:///home/andrew/code/binutils-2.26-new/binutils/cxxfilt", [], "file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000417,sig:11,src:005525,op:havoc,rep:8")
-    print rv
+    rv = run("file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/bins/eee926f28e8745dcd03adcb1113f3e4a7b79b1e5/bin/c++filt", [], "file:///home//andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000417,sig:11,src:005525,op:havoc,rep:8")
+    rv = run2("file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/bins/eee926f28e8745dcd03adcb1113f3e4a7b79b1e5/bin/c++filt", [([], "file:///home//andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000417,sig:11,src:005525,op:havoc,rep:8"),([],"file:///home//andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000410,sig:11,src:005215,op:arith8,pos:29,val:-21"),([],"file:///home//andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000413,sig:11,src:005294,op:havoc,rep:4")])
+    #print rv
