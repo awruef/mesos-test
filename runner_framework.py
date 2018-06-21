@@ -64,12 +64,13 @@ def get_tasks(data_dir):
 
 
 class TestCaseScheduler(mesos.interface.Scheduler):
-    def __init__(self, tasks, output, executor):
+    def __init__(self, tasks, output, executor, batch):
         self.tasks = tasks
         self.taskNum = len(tasks)
         self.executor = executor
         self.tasksLaunched = 0
         #self.taskData = {}
+        self.batchSize = batch
         self.results = []
         self.outfile = open(output, 'w')
         self.outwriter = csv.writer(self.outfile)
@@ -124,7 +125,7 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                 task.slave_id.value = offer.slave_id.value
                 task.name = "task %d" % tid
                 task_data_list = []
-                for i in range(0,10):
+                for i in range(0,self.batchSize):
                     if len(self.tasks) == 0:
                         continue
 
@@ -230,7 +231,7 @@ def main(args):
     framework.checkpoint = True
     framework.principal = "test-case-repeater"
 
-    driver = MesosSchedulerDriver(TestCaseScheduler(task_list, args.output, executor), framework, args.controller, 1)
+    driver = MesosSchedulerDriver(TestCaseScheduler(task_list, args.output, executor, args.batch), framework, args.controller, 1)
     status = None
     if driver.run() == mesos_pb2.DRIVER_STOPPED:
         status = 0
@@ -241,6 +242,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('framework')
+    parser.add_argument('--batch', type=int, default=10, help="Batch size")
     parser.add_argument('data_dir', type=str, help="Data directory")
     parser.add_argument('controller', type=str, help="Controller URI")
     parser.add_argument('output', type=str, help="Output file")
