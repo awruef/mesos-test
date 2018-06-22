@@ -4,13 +4,13 @@ import sys
 import json
 import threading
 import copy
+import time
 from runner_core.runner import run,run2
 
-import mesos.interface
-from mesos.interface import mesos_pb2
-from mesos.executor import MesosExecutorDriver
+from pymesos import MesosExecutorDriver, Executor, decode_data, encode_data
+from addict import Dict
 
-class TestCaseExecutor(mesos.interface.Executor):
+class TestCaseExecutor(Executor):
     """
     If this becomes a 1:N mapping for a queue of test cases, then 
     we should add some logic that will surrender tasks when they are 
@@ -19,12 +19,13 @@ class TestCaseExecutor(mesos.interface.Executor):
     def launchTask(self, d, t):
         def run_task(driver,task):
             # Tell everyone we've picked up and are running the task. 
-            update = mesos_pb2.TaskStatus()
+            update = Dict()
             update.task_id.value = task.task_id.value
-            update.state = mesos_pb2.TASK_RUNNING
+            update.state = 'TASK_RUNNING'
+            update.timestamp = time.time()
             driver.sendStatusUpdate(update)
 
-            task_data_list = json.loads(task.data)
+            task_data_list = json.loads(decode_data(task.data))
             failed_tasks = []
             finished_tasks = []
             program = None
@@ -61,10 +62,11 @@ class TestCaseExecutor(mesos.interface.Executor):
             for i in range(0, len(results)):
                 finished_tasks[i]['stack'] = results[i]
              
-            update = mesos_pb2.TaskStatus()
+            update = Dict()
             update.task_id.value = task.task_id.value
-            update.state = mesos_pb2.TASK_FINISHED
-            update.data = json.dumps(finished_tasks)
+            update.state = 'TASK_FINISHED'
+            update.timestamp = time.time()
+            update.data = encode_data(json.dumps(finished_tasks))
             driver.sendStatusUpdate(update)
 
         thread = threading.Thread(target=run_task,args=(d,t))
@@ -75,5 +77,5 @@ class TestCaseExecutor(mesos.interface.Executor):
         driver.sendFrameworkMessage(message)
 
 if __name__ == "__main__":
-    driver = MesosExecutorDriver(TestCaseExecutor())
-    sys.exit(0 if driver.run() == mesos_pb2.DRIVER_STOPPED else 1)
+    driver = MesosExecutorDriver(TestCaseExecutor(), use_addict=True)
+    driver.run()
