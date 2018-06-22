@@ -1,14 +1,18 @@
 #!/usr/bin/env python2.7
 import argparse 
+import getpass
+import socket
+import signal
+import time
 import json 
 import csv
 import sys
 import os
 
+from threading import Thread
 from runner_core.runner import stack_from_xml
-import mesos.interface
-from mesos.interface import mesos_pb2
-from mesos.scheduler import MesosSchedulerDriver
+from pymesos import MesosSchedulerDriver, Scheduler, decode_data, encode_data
+from addict import Dict
 
 def get_tasks(data_dir):
     """
@@ -63,13 +67,13 @@ def get_tasks(data_dir):
     return results
 
 
-class TestCaseScheduler(mesos.interface.Scheduler):
+class TestCaseScheduler(Scheduler):
     def __init__(self, tasks, output, executor, batch):
         self.tasks = tasks
         self.taskNum = len(tasks)
         self.executor = executor
         self.tasksLaunched = 0
-        #self.taskData = {}
+        self.taskData = {}
         self.batchSize = batch
         self.results = []
         self.outfile = open(output, 'w')
@@ -77,30 +81,31 @@ class TestCaseScheduler(mesos.interface.Scheduler):
         self.outwriter.writerow(["program_hash","input_file","result"])
 
     def _finished(self, state):
-        return state == mesos_pb2.TASK_FINISHED
+        return state == 'TASK_FINISHED'
 
     def _failed(self, state):
         r = False
-        if state == mesos_pb2.TASK_FAILED:
+        if state == 'TASK_FAILED':
             r = True
-        elif state == mesos_pb2.TASK_ERROR:
+        elif state == 'TASK_ERROR':
             r = True
-        elif state == mesos_pb2.TASK_KILLED:
+        elif state == 'TASK_KILLED':
             r = True
         return r
 
     def registered(self, driver, frameworkId, masterInfo):
         print "Registered with framework ID %s" % frameworkId.value
 
+    def getResource(self, res, name):
+        for r in res:
+            if r.name == name:
+                return r.scalar.value
+        return 0.0
+
     def resourceOffers(self, driver, offers):
         for offer in offers:
-            offerCpus = 0
-            offerMem = 0
-            for resource in offer.resources:
-                if resource.name == "cpus":
-                    offerCpus += resource.scalar.value
-                elif resource.name == "mem":
-                    offerMem += resource.scalar.value
+            offerCpus = self.getResource(offer.resources, 'cpus')
+            offerMem = self.getResource(offer.resources, 'mem')
             
             remainingCpus = offerCpus
             remainingMem = offerMem
@@ -117,13 +122,13 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                 print "Launching task %d using offer %s" \
                       % (tid, offer.id.value)
 
-                task = mesos_pb2.TaskInfo()
-                cpus = task.resources.add()
-                mem = task.resources.add()
-                
-                task.task_id.value = str(tid)
-                task.slave_id.value = offer.slave_id.value
+                task = Dict()
+                task_id = str(tid)  
+                task.task_id.value = task_id 
+                task.agent_id.value = offer.agent_id.value
                 task.name = "task %d" % tid
+                task.executor = self.executor
+
                 task_data_list = []
                 for i in range(0,self.batchSize):
                     if len(self.tasks) == 0:
@@ -141,27 +146,14 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                     task_data_list.append(task_data)
                     #self.taskData[task.task_id.value] = workunit
 
-                task.data = json.dumps(task_data_list)
-                task.executor.MergeFrom(self.executor)
-                """
-                commandinfo = mesos_pb2.CommandInfo()
+                if len(task_data_list) == 0:
+                    continue
 
-                proginfo = commandinfo.uris.add()
-                proginfo.value = "file://{}".format(workunit[1])
-
-                inputinfo = commandinfo.uris.add()
-                inputinfo.value = "file://{}".format(workunit[3])
-
-                task.command.MergeFrom(commandinfo)
-                """
-
-                cpus.name = "cpus"
-                cpus.type = mesos_pb2.Value.SCALAR
-                cpus.scalar.value = 1
-                mem.name = "mem"
-                mem.type = mesos_pb2.Value.SCALAR
-                mem.scalar.value = 512
-                
+                task.data = encode_data(json.dumps(task_data_list))
+                task.resources = [
+                    dict(name='cpus', type='SCALAR', scalar={'value': 1}),
+                    dict(name='mem', type='SCALAR', scalar={'value': 512}),
+                ]
 	
                 assigned_tasks.append(task)
 
@@ -170,15 +162,13 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                 remainingMem = remainingMem - 512
             
             # Propose to launch the tasks. 
-            operation = mesos_pb2.Offer.Operation()
-            operation.type = mesos_pb2.Offer.Operation.LAUNCH
-            operation.launch.task_infos.extend(assigned_tasks)
-            driver.acceptOffers([offer.id], [operation])
+            driver.launchTasks(offer.id, assigned_tasks)
 
     def statusUpdate(self, driver, update):
+        print 'Status update TID %s %s' % (update.task_id.value, update.state)
         # First case, maybe the task is finished? 
         if self._finished(update.state):
-            results = json.loads(update.data)
+            results = json.loads(decode_data(update.data))
             for result in results:
                 stack = stack_from_xml(result['stack'])
                 if stack == None:
@@ -196,7 +186,6 @@ class TestCaseScheduler(mesos.interface.Scheduler):
         if len(self.results) == self.taskNum:
             print "Got all the results"
             driver.stop()
-
         return
 
     def frameworkMessage(self, driver, executorId, slaveId, message):
@@ -206,39 +195,46 @@ def main(args):
     # First, read the data we need to produce the task list. 
     task_list = [] # A list of commands to run of the form (seq,command,args,input,stdin)
     task_list = get_tasks(args.data_dir)
+    executor = Dict()
+    executor.executor_id.value = 'TestCaseExecutor'
+    executor.name = executor.executor_id.value
+    executor.command.value = '%s %s' % (
+        sys.executable,
+        os.path.abspath(os.path.join(os.path.dirname(__file__), 'runner_executor.py'))
+    )
+    executor.resources = [
+        dict(name='mem', type='SCALAR', scalar={'value': 256}),
+        dict(name='cpus', type='SCALAR', scalar={'value': 0.1}),
+    ]
 
-    """
-    container = mesos_pb2.ContainerInfo()
-    docker_container = mesos_pb2.ContainerInfo.DockerInfo()
-    docker_container.image = "grinder"
-    container.type = mesos_pb2.ContainerInfo.DOCKER
-    container.docker.MergeFrom(docker_container)
-    """
+    framework = Dict()
+    framework.user = getpass.getuser()
+    framework.name = "TestCaseFramework"
+    framework.hostname = socket.gethostname()
 
-    # Get the path to our executor
-    executor_path = os.path.abspath("./executor")
-    # Then, boot up all the Mesos crap and get us registered with the framework. 
+    driver = MesosSchedulerDriver(
+        TestCaseScheduler(task_list, args.output, executor, args.batch),
+        framework,
+        args.controller,
+        use_addict=True,
+    )
 
-    executor = mesos_pb2.ExecutorInfo()
-    executor.executor_id.value = "test-case-executor"
-    executor.command.value = executor_path
-    executor.name = "Test case repeater"
-    #executor.container.MergeFrom(container)
+    def signal_handler(signal, frame):
+        driver.stop()
 
-    framework = mesos_pb2.FrameworkInfo()
-    framework.user = "" # Have Mesos fill in the current user.
-    framework.name = "Test case repeater framework"
-    framework.checkpoint = True
-    framework.principal = "test-case-repeater"
+    def run_driver_thread():
+        driver.run()
 
-    driver = MesosSchedulerDriver(TestCaseScheduler(task_list, args.output, executor, args.batch), framework, args.controller, 1)
-    status = None
-    if driver.run() == mesos_pb2.DRIVER_STOPPED:
-        status = 0
-    else:
-        status = 1
-    
-    return status
+    driver_thread = Thread(target=run_driver_thread, args=())
+    driver_thread.start()
+
+    print('Scheduler running, Ctrl+C to quit.')
+    signal.signal(signal.SIGINT, signal_handler)
+
+    while driver_thread.is_alive():
+        time.sleep(1)	
+
+	return 0
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('framework')
