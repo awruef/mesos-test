@@ -91,6 +91,8 @@ class TestCaseScheduler(Scheduler):
             r = True
         elif state == 'TASK_KILLED':
             r = True
+        elif state == 'TASK_LOST':
+            r = True
         return r
 
     def registered(self, driver, frameworkId, masterInfo):
