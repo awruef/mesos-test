@@ -1,5 +1,6 @@
 #!/usr/bin/env python2.7
 import argparse
+import base64
 import sys
 import zlib
 import json
@@ -114,7 +115,8 @@ if __name__ == "__main__":
         with open(args.offline_file, 'r') as inf:
             for line in inf.readlines():
                 task = Dict()
-                task.data = zlib.decompress(line.strip())
+                print len(line)
+                task.data = zlib.decompress(base64.b64decode(line[:-1]))
                 tce.launchTask(o, task)
                 cv.acquire()
                 cv.wait()

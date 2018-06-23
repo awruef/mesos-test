@@ -278,7 +278,7 @@ def main(args):
             data = encode_data(json.dumps(task_data_list))
 	
             # Write the JSON blob to the output file, one per line. 
-            of.write("{}\n".format(zlib.compress(data)))
+            of.write("{}\n".format(base64.b64encode(zlib.compress(data))))
 
         of.close()
         return 0
