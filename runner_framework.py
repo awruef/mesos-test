@@ -268,6 +268,7 @@ def main(args):
 
                 workunit = l.pop()
                 task_data = make_task_data(workunit)
+                task_data['to_fs'] = 0
                 task_data_list.append(task_data)
 
             if len(task_data_list) == 0:

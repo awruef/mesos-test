@@ -44,7 +44,10 @@ class TestCaseExecutor(Executor):
             program = None
             argslist = []
             finished_tasks = []
+            write_out = False
             for task_data in task_data_list:
+                if task_data.has_key('to_fs'):
+                    write_out = True
                 program = task_data['program']
                 args = task_data['program_args']
                 indata = task_data['input_filename']
@@ -74,6 +77,13 @@ class TestCaseExecutor(Executor):
 
             for i in range(0, len(results)):
                 finished_tasks[i]['stack'] = results[i]
+                if write_out:
+                    a = finished_tasks[i]['inputfile']
+                    if a[:7] == "file://":
+                        a = a[7:]
+                    of = open("{}.xml".format(a), 'w')
+                    of.write(results[i])
+                    of.close()
              
             update = Dict()
             update.task_id.value = task.task_id.value
