@@ -1,20 +1,42 @@
 #!/usr/bin/env python2.7
 import argparse 
+import base64
 import getpass
 import socket
 import signal
 import time
 import json 
+import copy
 import csv
 import sys
 import os
 
-from threading import Thread
+from threading import Thread, Lock
 from runner_core.runner import stack_from_xml
 from pymesos import MesosSchedulerDriver, Scheduler, decode_data, encode_data
 from addict import Dict
 
-def get_tasks(data_dir):
+def get_tasks_size(data_dir):
+    proglist = csv.reader(open('{}/proglist.csv'.format(data_dir), 'r'))
+    inputlist = csv.reader(open('{}/inputlist.csv'.format(data_dir), 'r'))
+    first = True
+    inputs = []
+    programs = []
+    for p in proglist:
+        if first == True:
+            first = False
+        else:
+            programs.append(p)
+    first = True
+    for i in inputlist:
+        if first == True:
+            first = False
+        else:
+            inputs.append(i)
+    
+    return len(inputs)*len(programs)
+
+def get_tasks(data_dir, program_idx):
     """
     proglist format : id,program,args
     inputlist format: filename,stdin
@@ -38,39 +60,45 @@ def get_tasks(data_dir):
         else:
             inputs.append(i)
 
-    for p in programs:
-        program_id = p[0]
-        program = p[1]
-        if program[0] != os.path.sep:
-            program = os.path.abspath("{0}/{1}".format(data_dir,program))
+    if program_idx >= len(programs):
+        return []
 
-        if len(p[2]) > 0:
-            program_args = p[2].split(" ")
+    p = programs[program_idx]
+    program_id = p[0]
+    program = p[1]
+    if program[0] != os.path.sep:
+        program = os.path.abspath("{0}/{1}".format(data_dir,program))
+
+    if len(p[2]) > 0:
+        program_args = p[2].split(" ")
+    else:
+        program_args = []
+    for i in inputs:
+        input_filename = i[0]
+        if input_filename[0] != os.path.sep:
+            input_filename = os.path.abspath("{0}/{1}".format(data_dir,input_filename))
+        do_read = i[1]
+        if do_read == 'False':
+            do_read = False
         else:
-            program_args = []
-        for i in inputs:
-            input_filename = i[0]
-            if input_filename[0] != os.path.sep:
-                input_filename = os.path.abspath("{0}/{1}".format(data_dir,input_filename))
-            do_read = i[1]
-            if do_read == 'False':
-                do_read = False
-            else:
-                do_read = True
-            is_stdin = i[2]
-            if is_stdin == 'False':
-                is_stdin = False
-            else:
-                is_stdin = True
-            results.append((taskid,program,program_args,input_filename,do_read,is_stdin,program_id))
-            taskid = taskid + 1
+            do_read = True
+        is_stdin = i[2]
+        if is_stdin == 'False':
+            is_stdin = False
+        else:
+            is_stdin = True
+        results.append((taskid,program,program_args,input_filename,do_read,is_stdin,program_id))
+        taskid = taskid + 1
     return results
 
 
 class TestCaseScheduler(Scheduler):
-    def __init__(self, tasks, output, executor, batch):
-        self.tasks = tasks
-        self.taskNum = len(tasks)
+    def __init__(self, data_dir, output, executor, batch):
+        self.tasks = []
+        self.taskMax = get_tasks_size(data_dir)
+        self.data_dir = data_dir
+        self.cur_program_idx = 0
+        self.lock = Lock()
         self.executor = executor
         self.tasksLaunched = 0
         self.taskData = {}
@@ -105,6 +133,15 @@ class TestCaseScheduler(Scheduler):
         return 0.0
 
     def resourceOffers(self, driver, offers):
+        self.lock.acquire() 
+        if len(self.tasks) == 0:
+            # Try to get a new set of tasks to do. 
+            newTasks = get_tasks(self.data_dir, self.cur_program_idx)
+            if len(newTasks) > 0:
+                self.tasks = newTasks
+                self.cur_program_idx = self.cur_program_idx + 1
+        
+        print "Progress: %d/%d" % (len(self.results),self.taskMax)
         for offer in offers:
             offerCpus = self.getResource(offer.resources, 'cpus')
             offerMem = self.getResource(offer.resources, 'mem')
@@ -132,11 +169,13 @@ class TestCaseScheduler(Scheduler):
                 task.executor = self.executor
 
                 task_data_list = []
+                units = []
                 for i in range(0,self.batchSize):
                     if len(self.tasks) == 0:
                         continue
 
                     workunit = self.tasks.pop()
+                    units.append(workunit)
                     task_data = {}
                     task_data['taskid'] = workunit[0]
                     task_data['program'] = "file://{}".format(workunit[1])
@@ -146,7 +185,6 @@ class TestCaseScheduler(Scheduler):
                     task_data['stdin'] = workunit[5]
                     task_data['program_id'] = workunit[6]
                     task_data_list.append(task_data)
-                    #self.taskData[task.task_id.value] = workunit
 
                 if len(task_data_list) == 0:
                     continue
@@ -158,6 +196,7 @@ class TestCaseScheduler(Scheduler):
                 ]
 	
                 assigned_tasks.append(task)
+                self.taskData[task.task_id.value] = copy.deepcopy(units)
 
                 # This is how much we used. 
                 remainingCpus = remainingCpus - 1
@@ -165,38 +204,48 @@ class TestCaseScheduler(Scheduler):
             
             # Propose to launch the tasks. 
             driver.launchTasks(offer.id, assigned_tasks)
+        self.lock.release()
 
-    def statusUpdate(self, driver, update):
-        print 'Status update TID %s %s' % (update.task_id.value, update.state)
-        # First case, maybe the task is finished? 
-        if self._finished(update.state):
-            results = json.loads(decode_data(update.data))
-            for result in results:
-                stack = stack_from_xml(result['stack'])
-                if stack == None:
-                    stack = "-nocrash-"
-                self.outwriter.writerow([result['hash'], result['inputfile'], "-".join(stack)])
-                self.results.append(stack)
+    def statusUpdate(s, d, u):
+        def worker(self,driver,update):
+            print 'Status update TID %s %s' % (update.task_id.value, update.state)
+            # First case, maybe the task is finished? 
+            if self._finished(update.state):
+                results = json.loads(decode_data(update.data))
+                for result in results:
+                    self.lock.acquire()
+                    writedata = base64.b64encode(result['stack'])
+                    self.outwriter.writerow([result['hash'], result['inputfile'], writedata])
+                    self.results.append(update.task_id.value)
+                    self.lock.release()
         
-        # If the task was killed or was lost or failed, we should re-queue it.
-        if self._failed(update.state):
-            print "something failed!"
-            print update
-            driver.stop()
+            # If the task was killed or was lost or failed, we should re-queue it.
+            if self._failed(update.state):
+                units = self.taskData[update.task_id.value]
+                print "something failed!"
+                print update
+                self.lock.acquire()
+                self.tasks.extend(units)
+                self.lock.release()
 
-        # Maybe, we have all the results?
-        if len(self.results) == self.taskNum:
-            print "Got all the results"
-            driver.stop()
+            # Maybe, we have all the results?
+            self.lock.acquire()
+            if len(self.results) == self.taskMax:
+                print "Got all the results"
+                driver.stop()
+            self.lock.release() 
+            return
+
+        thread = Thread(target=worker,args=(s,d,u))
+        thread.start()
         return
 
     def frameworkMessage(self, driver, executorId, slaveId, message):
         return
 
 def main(args):
-    # First, read the data we need to produce the task list. 
-    task_list = [] # A list of commands to run of the form (seq,command,args,input,stdin)
-    task_list = get_tasks(args.data_dir)
+    import logging
+    logging.basicConfig(level=logging.DEBUG)
     executor = Dict()
     executor.executor_id.value = 'TestCaseExecutor'
     executor.name = executor.executor_id.value
@@ -205,8 +254,8 @@ def main(args):
         os.path.abspath(os.path.join(os.path.dirname(__file__), 'runner_executor.py'))
     )
     executor.resources = [
-        dict(name='mem', type='SCALAR', scalar={'value': 256}),
-        dict(name='cpus', type='SCALAR', scalar={'value': 0.1}),
+        dict(name='mem', type='SCALAR', scalar={'value': 128}),
+        dict(name='cpus', type='SCALAR', scalar={'value': 0}),
     ]
 
     framework = Dict()
@@ -215,7 +264,7 @@ def main(args):
     framework.hostname = socket.gethostname()
 
     driver = MesosSchedulerDriver(
-        TestCaseScheduler(task_list, args.output, executor, args.batch),
+        TestCaseScheduler(args.data_dir, args.output, executor, args.batch),
         framework,
         args.controller,
         use_addict=True,
