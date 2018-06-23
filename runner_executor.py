@@ -1,5 +1,5 @@
 #!/usr/bin/env python2.7
-
+import argparse
 import sys
 import json
 import threading
@@ -9,6 +9,19 @@ from runner_core.runner import run,run2
 
 from pymesos import MesosExecutorDriver, Executor, decode_data, encode_data
 from addict import Dict
+
+class Offline(object):
+    def __init__(self, cv):
+        self.cv = cv
+
+    def sendStatusUpdate(self, update):
+
+        if update.state == 'TASK_FINISHED':
+            self.cv.acquire()
+            self.cv.notify()
+            self.cv.release()
+
+        return
 
 class TestCaseExecutor(Executor):
     """
@@ -77,5 +90,24 @@ class TestCaseExecutor(Executor):
         driver.sendFrameworkMessage(message)
 
 if __name__ == "__main__":
-    driver = MesosExecutorDriver(TestCaseExecutor(), use_addict=True)
-    driver.run()
+    parser = argparse.ArgumentParser('runner_executor')
+    parser.add_argument('--offline', action="store_true", default=False)
+    parser.add_argument('--offline-file', type=str, default="")
+    args = parser.parse_args()
+    if args.offline:
+        print "Doing offline work"
+        # Fake out being online by making a dict. 
+        cv = threading.Condition() 
+        tce = TestCaseExecutor()
+        o = Offline(cv)
+        with open(args.offline_file, 'r') as inf:
+            for line in inf.readlines():
+                task = Dict()
+                task.data = line.strip()
+                tce.launchTask(o, task)
+                cv.acquire()
+                cv.wait()
+                cv.release()
+    else:
+        driver = MesosExecutorDriver(TestCaseExecutor(), use_addict=True)
+        driver.run()

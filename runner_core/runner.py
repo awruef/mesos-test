@@ -137,7 +137,8 @@ def run2(program, arguments_list):
     docker_cmdline.append("grinder")
     docker_cmdline.append("/sandbox/run.sh") 
     while True:
-        result = subprocess.call(docker_cmdline)
+        null_out = open('/dev/null', 'w')
+        result = subprocess.call(docker_cmdline, stdout=null_out, stderr=null_out)
         if result == 0:
             break
 
@@ -213,8 +214,8 @@ def run(program, arguments, stdin_f=None):
     # Then, jam them together and run them. 
     docker_cmdline.append("/sandbox/run.sh") 
     null_out = open('/dev/null', 'w')
-    #subprocess.call(docker_cmdline, stdout=null_out, stderr=null_out)
-    subprocess.call(docker_cmdline, stdout=null_out)
+    subprocess.call(docker_cmdline, stdout=null_out, stderr=null_out)
+    #subprocess.call(docker_cmdline, stdout=null_out)
     #subprocess.call(docker_cmdline)
 
     # Then, read the XML data file output. 

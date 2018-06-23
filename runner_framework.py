@@ -91,6 +91,16 @@ def get_tasks(data_dir, program_idx):
         taskid = taskid + 1
     return results
 
+def make_task_data(workunit):
+    task_data = {}
+    task_data['taskid'] = workunit[0]
+    task_data['program'] = "file://{}".format(workunit[1])
+    task_data['program_args'] = workunit[2]
+    task_data['input_filename'] = "file://{}".format(workunit[3])
+    task_data['do_read'] = workunit[4]
+    task_data['stdin'] = workunit[5]
+    task_data['program_id'] = workunit[6]
+    return task_data 
 
 class TestCaseScheduler(Scheduler):
     def __init__(self, data_dir, output, executor, batch):
@@ -176,14 +186,7 @@ class TestCaseScheduler(Scheduler):
 
                     workunit = self.tasks.pop()
                     units.append(workunit)
-                    task_data = {}
-                    task_data['taskid'] = workunit[0]
-                    task_data['program'] = "file://{}".format(workunit[1])
-                    task_data['program_args'] = workunit[2]
-                    task_data['input_filename'] = "file://{}".format(workunit[3])
-                    task_data['do_read'] = workunit[4]
-                    task_data['stdin'] = workunit[5]
-                    task_data['program_id'] = workunit[6]
+                    task_data = make_task_data(workunit)
                     task_data_list.append(task_data)
 
                 if len(task_data_list) == 0:
@@ -244,6 +247,40 @@ class TestCaseScheduler(Scheduler):
         return
 
 def main(args):
+    if args.offline:
+        # Get all the tasks. 
+        i = 0
+        l = []
+        while True:
+            newTasks = get_tasks(args.data_dir, i)
+            if len(newTasks) == 0:
+                break
+            l.extend(newTasks)
+            i = i + 1
+
+        # Create JSON blobs for each task, including batch size.
+        of = open(args.output, 'w')
+        while len(l) > 0:
+            task_data_list = []
+            for i in range(0,args.batch):
+                if len(l) == 0:
+                    continue
+
+                workunit = l.pop()
+                task_data = make_task_data(workunit)
+                task_data_list.append(task_data)
+
+            if len(task_data_list) == 0:
+                continue
+
+            data = encode_data(json.dumps(task_data_list))
+	
+            # Write the JSON blob to the output file, one per line. 
+            of.write("{}\n".format(data))
+
+        of.close()
+        return 0
+
     import logging
     logging.basicConfig(level=logging.DEBUG)
     executor = Dict()
@@ -289,6 +326,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('framework')
+    parser.add_argument('--offline', action='store_true')
     parser.add_argument('--batch', type=int, default=10, help="Batch size")
     parser.add_argument('data_dir', type=str, help="Data directory")
     parser.add_argument('controller', type=str, help="Controller URI")
