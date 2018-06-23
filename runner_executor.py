@@ -107,7 +107,6 @@ if __name__ == "__main__":
     parser.add_argument('--offline-file', type=str, default="")
     args = parser.parse_args()
     if args.offline:
-        print "Doing offline work"
         # Fake out being online by making a dict. 
         cv = threading.Condition() 
         tce = TestCaseExecutor()
@@ -115,7 +114,6 @@ if __name__ == "__main__":
         with open(args.offline_file, 'r') as inf:
             for line in inf.readlines():
                 task = Dict()
-                print len(line)
                 task.data = zlib.decompress(base64.b64decode(line[:-1]))
                 tce.launchTask(o, task)
                 cv.acquire()
