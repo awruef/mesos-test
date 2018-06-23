@@ -1,6 +1,7 @@
 #!/usr/bin/env python2.7
 import argparse
 import sys
+import zlib
 import json
 import threading
 import copy
@@ -113,7 +114,7 @@ if __name__ == "__main__":
         with open(args.offline_file, 'r') as inf:
             for line in inf.readlines():
                 task = Dict()
-                task.data = line.strip()
+                task.data = zlib.decompress(line.strip())
                 tce.launchTask(o, task)
                 cv.acquire()
                 cv.wait()

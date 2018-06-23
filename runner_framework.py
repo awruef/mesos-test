@@ -1,5 +1,6 @@
 #!/usr/bin/env python2.7
 import argparse 
+import zlib
 import base64
 import getpass
 import socket
@@ -277,7 +278,7 @@ def main(args):
             data = encode_data(json.dumps(task_data_list))
 	
             # Write the JSON blob to the output file, one per line. 
-            of.write("{}\n".format(data))
+            of.write("{}\n".format(zlib.compress(data)))
 
         of.close()
         return 0
