@@ -81,9 +81,10 @@ class TestCaseExecutor(Executor):
                 finished_tasks[i]['stack'] = results[i]
                 if write_out:
                     a = finished_tasks[i]['inputfile']
+                    b = finished_tasks[i]['hash']
                     if a[:7] == "file://":
                         a = a[7:]
-                    of = open("{}.xml".format(a), 'w')
+                    of = open("{0}-{1}.xml".format(a,b), 'w')
                     of.write(results[i])
                     of.close()
              
