@@ -7,6 +7,7 @@ import json
 import threading
 import copy
 import time
+import os
 from runner_core.runner import run,run2
 
 from pymesos import MesosExecutorDriver, Executor, decode_data, encode_data
@@ -72,10 +73,15 @@ class TestCaseExecutor(Executor):
                 outdata['hash'] = task_data['program_id']
                 outdata['inputfile'] = task_data['input_filename']
                 outdata['stack'] = ""
-                argslist.append((args, stdindata)) 
-                finished_tasks.append(outdata)
-
-            results = run2(program, argslist)
+                nm = "{0}-{1}.xml.gz".format(a,b)
+                if write_out and not os.path.isfile(nm):
+                    argslist.append((args, stdindata)) 
+                    finished_tasks.append(outdata)
+            
+            if len(argslist) > 0:
+                results = run2(program, argslist)
+            else:
+                results = []
 
             for i in range(0, len(results)):
                 finished_tasks[i]['stack'] = results[i]
@@ -87,6 +93,7 @@ class TestCaseExecutor(Executor):
                     of = open("{0}-{1}.xml".format(a,b), 'w')
                     of.write(results[i])
                     of.close()
+                    subprocess.call(['/bin/gzip', "{0}-{1}.xml".format(a,b)])
              
             update = Dict()
             update.task_id.value = task.task_id.value
