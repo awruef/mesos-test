@@ -131,7 +131,7 @@ def run2(program, arguments_list):
     os.chmod("{}/run.sh".format(tempdir), stat.S_IREAD|stat.S_IEXEC)
 
     # Run run.sh under docker
-    docker_cmdline = ["docker", "run", "--rm", "--user", "1000"]
+    docker_cmdline = ["docker", "run", "--rm", "--user", "1000", "-m", "1024m"]
     docker_cmdline.append("-v")
     docker_cmdline.append("{}:/sandbox".format(tempdir))
     docker_cmdline.append("grinder")
