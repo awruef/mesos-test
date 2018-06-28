@@ -138,7 +138,7 @@ def run2(program, arguments_list):
     docker_cmdline.append("/sandbox/run.sh") 
     while True:
         null_out = open('/dev/null', 'w')
-        result = subprocess.call(docker_cmdline, stdout=null_out, stderr=null_out)
+        result = subprocess.call(docker_cmdline) #, stdout=null_out, stderr=null_out)
         if result == 0:
             break
 
@@ -214,9 +214,10 @@ def run(program, arguments, stdin_f=None):
     # Then, jam them together and run them. 
     docker_cmdline.append("/sandbox/run.sh") 
     null_out = open('/dev/null', 'w')
-    subprocess.call(docker_cmdline, stdout=null_out, stderr=null_out)
+    #subprocess.call(docker_cmdline, stdout=null_out, stderr=null_out)
     #subprocess.call(docker_cmdline, stdout=null_out)
-    #subprocess.call(docker_cmdline)
+    print docker_cmdline 
+    subprocess.call(docker_cmdline)
 
     # Then, read the XML data file output. 
     data = open("{}/out.xml".format(tempdir), 'r').read()

@@ -74,7 +74,11 @@ class TestCaseExecutor(Executor):
                 outdata['hash'] = task_data['program_id']
                 outdata['inputfile'] = task_data['input_filename']
                 outdata['stack'] = ""
-                nm = "{0}-{1}.xml.gz".format(task_data['input_filename'],task_data['program_id'])
+                a = outdata['inputfile']
+                b = outdata['hash']
+                if a[:7] == "file://":
+                    a = a[7:]
+                nm = "{0}-{1}.xml.gz".format(a,b)
                 if write_out and not os.path.isfile(nm):
                     argslist.append((args, stdindata)) 
                     finished_tasks.append(outdata)
@@ -94,7 +98,7 @@ class TestCaseExecutor(Executor):
                     of = open("{0}-{1}.xml".format(a,b), 'w')
                     of.write(results[i])
                     of.close()
-                    subprocess.call(['/bin/gzip', "{0}-{1}.xml".format(a,b)])
+                    subprocess.call(['/bin/gzip', "-f", "{0}-{1}.xml".format(a,b)])
              
             update = Dict()
             update.task_id.value = task.task_id.value
