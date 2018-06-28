@@ -73,7 +73,7 @@ class TestCaseExecutor(Executor):
                 outdata['hash'] = task_data['program_id']
                 outdata['inputfile'] = task_data['input_filename']
                 outdata['stack'] = ""
-                nm = "{0}-{1}.xml.gz".format(a,b)
+                nm = "{0}-{1}.xml.gz".format(task_data['input_filename'],task_data['program_id'])
                 if write_out and not os.path.isfile(nm):
                     argslist.append((args, stdindata)) 
                     finished_tasks.append(outdata)
