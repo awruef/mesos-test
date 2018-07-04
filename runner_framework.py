@@ -239,7 +239,6 @@ class TestCaseScheduler(mesos.interface.Scheduler):
 
     def statusUpdate(s, d, u):
         def worker(self,driver,update):
-            print 'Status update TID %s %s' % (update.task_id.value, update.state)
             # First case, maybe the task is finished? 
             if self._finished(update.state):
                 #results = json.loads(decode_data(update.data))
