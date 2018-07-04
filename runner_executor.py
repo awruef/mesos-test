@@ -86,7 +86,11 @@ class TestCaseExecutor(mesos.interface.Executor):
                 if a[:7] == "file://":
                     a = a[7:]
                 nm = "{0}-{1}.xml.gz".format(a,b)
+                skip = False
                 if write_out and not os.path.isfile(nm):
+                    skip = True
+
+                if not skip:
                     argslist.append((args, stdindata)) 
                     finished_tasks.append(outdata)
             
