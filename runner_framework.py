@@ -14,7 +14,10 @@ import os
 
 from threading import Thread, Lock
 from runner_core.runner import stack_from_xml
-from pymesos import MesosSchedulerDriver, Scheduler, decode_data, encode_data
+#from pymesos import MesosSchedulerDriver, Scheduler, decode_data, encode_data
+import mesos.interface
+from mesos.interface import mesos_pb2
+from mesos.scheduler import MesosSchedulerDriver
 from addict import Dict
 
 def get_tasks_size(data_dir):
@@ -103,7 +106,7 @@ def make_task_data(workunit):
     task_data['program_id'] = workunit[6]
     return task_data 
 
-class TestCaseScheduler(Scheduler):
+class TestCaseScheduler(mesos.interface.Scheduler):
     def __init__(self, data_dir, output, executor, batch):
         self.tasks = []
         self.taskMax = get_tasks_size(data_dir)
@@ -120,17 +123,17 @@ class TestCaseScheduler(Scheduler):
         self.outwriter.writerow(["program_hash","input_file","result"])
 
     def _finished(self, state):
-        return state == 'TASK_FINISHED'
+        return state == mesos_pb2.TASK_FINISHED
 
     def _failed(self, state):
         r = False
-        if state == 'TASK_FAILED':
+        if state == mesos_pb2.TASK_FAILED:
             r = True
-        elif state == 'TASK_ERROR':
+        elif state == mesos_pb2.TASK_ERROR:
             r = True
-        elif state == 'TASK_KILLED':
+        elif state == mesos_pb2.TASK_KILLED:
             r = True
-        elif state == 'TASK_LOST':
+        elif state == mesos_pb2.TASK_LOST:
             r = True
         return r
 
@@ -154,8 +157,15 @@ class TestCaseScheduler(Scheduler):
         
         print "Progress: %d/%d" % (len(self.results),self.taskMax)
         for offer in offers:
-            offerCpus = self.getResource(offer.resources, 'cpus')
-            offerMem = self.getResource(offer.resources, 'mem')
+            #offerCpus = self.getResource(offer.resources, 'cpus')
+            #offerMem = self.getResource(offer.resources, 'mem')
+            offerCpus = 0
+            offerMem = 0
+            for resource in offer.resources:
+                if resource.name == "cpus":
+                    offerCpus += resource.scalar.value
+                elif resource.name == "mem":
+                    offerMem += resource.scalar.value
             
             remainingCpus = offerCpus
             remainingMem = offerMem
@@ -171,13 +181,18 @@ class TestCaseScheduler(Scheduler):
 
                 print "Launching task %d using offer %s" \
                       % (tid, offer.id.value)
-
-                task = Dict()
-                task_id = str(tid)  
-                task.task_id.value = task_id 
-                task.agent_id.value = offer.agent_id.value
+                task = mesos_pb2.TaskInfo()
+                cpus = task.resources.add()
+                mem = task.resources.add()
+                
+                task.task_id.value = str(tid)
+                task.slave_id.value = offer.slave_id.value
+                #task = Dict()
+                #task_id = str(tid)  
+                #task.task_id.value = task_id 
+                #task.agent_id.value = offer.agent_id.value
                 task.name = "task %d" % tid
-                task.executor = self.executor
+                #task.executor = self.executor
 
                 task_data_list = []
                 units = []
@@ -193,11 +208,19 @@ class TestCaseScheduler(Scheduler):
                 if len(task_data_list) == 0:
                     continue
 
-                task.data = encode_data(json.dumps(task_data_list))
-                task.resources = [
-                    dict(name='cpus', type='SCALAR', scalar={'value': 1}),
-                    dict(name='mem', type='SCALAR', scalar={'value': 512}),
-                ]
+                #task.data = encode_data(json.dumps(task_data_list))
+                task.data = json.dumps(task_data_list)
+                task.executor.MergeFrom(self.executor)
+                cpus.name = "cpus"
+                cpus.type = mesos_pb2.Value.SCALAR
+                cpus.scalar.value = 1
+                mem.name = "mem"
+                mem.type = mesos_pb2.Value.SCALAR
+                mem.scalar.value = 512
+                #task.resources = [
+                #    dict(name='cpus', type='SCALAR', scalar={'value': 1}),
+                #    dict(name='mem', type='SCALAR', scalar={'value': 512}),
+                #]
 	
                 assigned_tasks.append(task)
                 self.taskData[task.task_id.value] = copy.deepcopy(units)
@@ -207,7 +230,11 @@ class TestCaseScheduler(Scheduler):
                 remainingMem = remainingMem - 512
             
             # Propose to launch the tasks. 
-            driver.launchTasks(offer.id, assigned_tasks)
+            operation = mesos_pb2.Offer.Operation()
+            operation.type = mesos_pb2.Offer.Operation.LAUNCH
+            operation.launch.task_infos.extend(assigned_tasks)
+            driver.acceptOffers([offer.id], [operation])            
+            #driver.launchTasks(offer.id, assigned_tasks)
         self.lock.release()
 
     def statusUpdate(s, d, u):
@@ -215,7 +242,8 @@ class TestCaseScheduler(Scheduler):
             print 'Status update TID %s %s' % (update.task_id.value, update.state)
             # First case, maybe the task is finished? 
             if self._finished(update.state):
-                results = json.loads(decode_data(update.data))
+                #results = json.loads(decode_data(update.data))
+                results = json.loads(update.data)
                 for result in results:
                     self.lock.acquire()
                     writedata = base64.b64encode(result['stack'])
@@ -282,49 +310,39 @@ def main(args):
 
         of.close()
         return 0
+    # Get the path to our executor
+    executor_path = os.path.abspath("./executor")
+    # Then, boot up all the Mesos crap and get us registered with the framework. 
 
-    import logging
-    logging.basicConfig(level=logging.DEBUG)
-    executor = Dict()
-    executor.executor_id.value = 'TestCaseExecutor'
-    executor.name = executor.executor_id.value
-    executor.command.value = '%s %s' % (
-        sys.executable,
-        os.path.abspath(os.path.join(os.path.dirname(__file__), 'runner_executor.py'))
-    )
-    executor.resources = [
-        dict(name='mem', type='SCALAR', scalar={'value': 128}),
-        dict(name='cpus', type='SCALAR', scalar={'value': 0}),
-    ]
+    executor = mesos_pb2.ExecutorInfo()
+    executor.executor_id.value = "test-case-executor"
+    executor.command.value = executor_path
+    executor.name = "Test case repeater"
+    cpus = executor.resources.add()
+    mem = executor.resources.add()
+    cpus.name = "cpus"
+    cpus.type = mesos_pb2.Value.SCALAR
+    cpus.scalar.value = 0
+    mem.name = "mem"
+    mem.type = mesos_pb2.Value.SCALAR
+    mem.scalar.value = 128
+ 
+    #executor.container.MergeFrom(container)
 
-    framework = Dict()
-    framework.user = getpass.getuser()
-    framework.name = "TestCaseFramework"
-    framework.hostname = socket.gethostname()
+    framework = mesos_pb2.FrameworkInfo()
+    framework.user = "" # Have Mesos fill in the current user.
+    framework.name = "Test case repeater framework"
+    framework.checkpoint = True
+    framework.principal = "test-case-repeater"
 
-    driver = MesosSchedulerDriver(
-        TestCaseScheduler(args.data_dir, args.output, executor, args.batch),
-        framework,
-        args.controller,
-        use_addict=True,
-    )
-
-    def signal_handler(signal, frame):
-        driver.stop()
-
-    def run_driver_thread():
-        driver.run()
-
-    driver_thread = Thread(target=run_driver_thread, args=())
-    driver_thread.start()
-
-    print('Scheduler running, Ctrl+C to quit.')
-    signal.signal(signal.SIGINT, signal_handler)
-
-    while driver_thread.is_alive():
-        time.sleep(1)	
-
-	return 0
+    driver = MesosSchedulerDriver(TestCaseScheduler(task_list, args.output, executor, args.batch), framework, args.controller, 1)
+    status = None
+    if driver.run() == mesos_pb2.DRIVER_STOPPED:
+        status = 0
+    else:
+        status = 1
+    
+    return status
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('framework')

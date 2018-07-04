@@ -2,8 +2,8 @@
 
 # This script uses MESOS_SOURCE_DIR and MESOS_BUILD_DIR which come
 # from configuration substitutions.
-MESOS_SOURCE_DIR=/home/andrew/code/mesos-1.6.0.obj/../mesos-1.6.0
-MESOS_BUILD_DIR=/home/andrew/code/mesos-1.6.0.obj
+MESOS_SOURCE_DIR=/home/ubuntu/mesos.obj/../mesos
+MESOS_BUILD_DIR=/home/ubuntu/mesos.obj
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Use colors for errors.
