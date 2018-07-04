@@ -335,7 +335,7 @@ def main(args):
     framework.checkpoint = True
     framework.principal = "test-case-repeater"
 
-    driver = MesosSchedulerDriver(TestCaseScheduler(task_list, args.output, executor, args.batch), framework, args.controller, 1)
+    driver = MesosSchedulerDriver(TestCaseScheduler(args.data_dir, args.output, executor, args.batch), framework, args.controller, 1)
     status = None
     if driver.run() == mesos_pb2.DRIVER_STOPPED:
         status = 0

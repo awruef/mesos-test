@@ -112,7 +112,7 @@ class TestCaseExecutor(mesos.interface.Executor):
             update.task_id.value = task.task_id.value
             #update.state = 'TASK_FINISHED'
             update.state = mesos_pb2.TASK_FINISHED
-            update.state = 'TASK_FINISHED'
+            #update.state = 'TASK_FINISHED'
             #update.timestamp = time.time()
             #update.data = encode_data(json.dumps(finished_tasks))
             update.data = json.dumps(finished_tasks)
