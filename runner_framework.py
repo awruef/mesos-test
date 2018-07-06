@@ -117,8 +117,17 @@ class TestCaseScheduler(mesos.interface.Scheduler):
         self.tasksLaunched = 0
         self.taskData = {}
         self.batchSize = batch
-        self.results = []
-        self.outfile = open(output, 'w')
+        self.results = 0
+        self.done = set()
+        u = open(output, 'r')
+        v = csv.reader(u)
+        v.next()
+        for l in v:        
+            hsh = l[0]
+            f = l[1]
+            self.done.add("%s-%s" % (hsh,f))
+        u.close()
+        self.outfile = open(output, 'a')
         self.outwriter = csv.writer(self.outfile)
         self.outwriter.writerow(["program_hash","input_file","result"])
 
@@ -150,10 +159,22 @@ class TestCaseScheduler(mesos.interface.Scheduler):
         self.lock.acquire() 
         if len(self.tasks) == 0:
             # Try to get a new set of tasks to do. 
-            newTasks = get_tasks(self.data_dir, self.cur_program_idx)
-            if len(newTasks) > 0:
-                self.tasks = newTasks
-                self.cur_program_idx = self.cur_program_idx + 1
+            while self.results != self.taskMax:
+                newTasks = get_tasks(self.data_dir, self.cur_program_idx)
+                if len(newTasks) > 0:
+                    self.cur_program_idx = self.cur_program_idx + 1
+                filteredTasks = []
+                for t in newTasks:
+                    f = t[3]
+                    ph = t[6]
+                    q = "%s-%s" % (ph,f)
+                    if not q in self.done:
+                        filteredTasks.append(t)
+                    else:
+                        self.results = self.results + 1
+                if len(filteredTasks) > 0:
+                    self.tasks = filteredTasks
+                    break
         
         print "Progress: %d/%d" % (len(self.results),self.taskMax)
         for offer in offers:
@@ -171,16 +192,16 @@ class TestCaseScheduler(mesos.interface.Scheduler):
             remainingMem = offerMem
             assigned_tasks = []
 
-            print "Received offer %s with cpus: %s and mem: %s" \
-                  % (offer.id.value, offerCpus, offerMem)
+            #print "Received offer %s with cpus: %s and mem: %s" \
+            #      % (offer.id.value, offerCpus, offerMem)
             
             while len(self.tasks) > 0 and remainingCpus >= 1 and remainingMem >= 512:
                 # Schedule a task. 
                 tid = self.tasksLaunched
                 self.tasksLaunched += 1
 
-                print "Launching task %d using offer %s" \
-                      % (tid, offer.id.value)
+                #print "Launching task %d using offer %s" \
+                #      % (tid, offer.id.value)
                 task = mesos_pb2.TaskInfo()
                 cpus = task.resources.add()
                 mem = task.resources.add()
@@ -245,9 +266,10 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                 results = json.loads(update.data)
                 for result in results:
                     self.lock.acquire()
-                    writedata = base64.b64encode(result['stack'])
+                    writedata = base64.b64encode(zlib.compress(result['stack']))
                     self.outwriter.writerow([result['hash'], result['inputfile'], writedata])
-                    self.results.append(update.task_id.value)
+                    #self.results.append(update.task_id.value)
+                    self.results = self.results + 1
                     self.lock.release()
         
             # If the task was killed or was lost or failed, we should re-queue it.
@@ -261,7 +283,7 @@ class TestCaseScheduler(mesos.interface.Scheduler):
 
             # Maybe, we have all the results?
             self.lock.acquire()
-            if len(self.results) == self.taskMax:
+            if self.results == self.taskMax:
                 print "Got all the results"
                 driver.stop()
             self.lock.release() 
