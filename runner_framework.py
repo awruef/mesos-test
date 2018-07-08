@@ -11,6 +11,7 @@ import copy
 import csv
 import sys
 import os
+import hashlib
 
 from threading import Thread, Lock
 from runner_core.runner import stack_from_xml
@@ -118,6 +119,7 @@ class TestCaseScheduler(mesos.interface.Scheduler):
         self.taskData = {}
         self.batchSize = batch
         self.results = 0
+        self.outstanding = 0
         self.done = set()
         u = open(output, 'r')
         v = csv.reader(u)
@@ -125,12 +127,33 @@ class TestCaseScheduler(mesos.interface.Scheduler):
         for l in v:        
             hsh = l[0]
             f = l[1]
-            self.done.add("%s-%s" % (hsh,f))
+            if f[:7] == "file://":
+                f = f[7:]
+            q = "%s-%s" % (hsh,f)
+            id_ = int(hashlib.md5("%s-%s" % (hsh,f)).hexdigest(), 16)
+            self.done.add(id_)
         u.close()
         self.outfile = open(output, 'a')
         self.outwriter = csv.writer(self.outfile)
         self.outwriter.writerow(["program_hash","input_file","result"])
-
+        while self.results != self.taskMax:
+            newTasks = get_tasks(self.data_dir, self.cur_program_idx)
+            if len(newTasks) > 0:
+                self.cur_program_idx = self.cur_program_idx + 1
+            filteredTasks = []
+            for t in newTasks:
+                f = t[3]
+                ph = t[6]
+                q = "%s-%s" % (ph,f)
+                id_ = int(hashlib.md5(q).hexdigest(), 16)
+                if not id_ in self.done:
+                    filteredTasks.append(t)
+                else:
+                    self.results = self.results + 1
+            if len(filteredTasks) > 0:
+                self.tasks = filteredTasks
+                break
+ 
     def _finished(self, state):
         return state == mesos_pb2.TASK_FINISHED
 
@@ -157,9 +180,15 @@ class TestCaseScheduler(mesos.interface.Scheduler):
 
     def resourceOffers(self, driver, offers):
         self.lock.acquire() 
+
+        if self.results + self.outstanding >= self.taskMax:
+            print "No need for more!"
+            self.lock.release()
+            return
+
         if len(self.tasks) == 0:
             # Try to get a new set of tasks to do. 
-            while self.results != self.taskMax:
+            while self.results < self.taskMax:
                 newTasks = get_tasks(self.data_dir, self.cur_program_idx)
                 if len(newTasks) > 0:
                     self.cur_program_idx = self.cur_program_idx + 1
@@ -168,15 +197,16 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                     f = t[3]
                     ph = t[6]
                     q = "%s-%s" % (ph,f)
-                    if not q in self.done:
+                    id_ = int(hashlib.md5(q).hexdigest(), 16)
+                    if not id_ in self.done:
                         filteredTasks.append(t)
                     else:
                         self.results = self.results + 1
                 if len(filteredTasks) > 0:
                     self.tasks = filteredTasks
                     break
-        
-        print "Progress: %d/%d" % (len(self.results),self.taskMax)
+         
+        print "Progress: %d/%d" % (self.results,self.taskMax)
         for offer in offers:
             #offerCpus = self.getResource(offer.resources, 'cpus')
             #offerMem = self.getResource(offer.resources, 'mem')
@@ -222,6 +252,7 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                         continue
 
                     workunit = self.tasks.pop()
+                    self.outstanding = self.outstanding + 1
                     units.append(workunit)
                     task_data = make_task_data(workunit)
                     task_data_list.append(task_data)
@@ -270,14 +301,16 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                     self.outwriter.writerow([result['hash'], result['inputfile'], writedata])
                     #self.results.append(update.task_id.value)
                     self.results = self.results + 1
+                    self.outstanding = self.outstanding - 1
                     self.lock.release()
         
             # If the task was killed or was lost or failed, we should re-queue it.
             if self._failed(update.state):
                 units = self.taskData[update.task_id.value]
-                print "something failed!"
-                print update
+
                 self.lock.acquire()
+                for u in units:
+                    self.outstanding = self.outstanding - 1
                 self.tasks.extend(units)
                 self.lock.release()
 
@@ -366,6 +399,7 @@ def main(args):
     return status
 
 if __name__ == '__main__':
+    csv.field_size_limit(100000000)
     parser = argparse.ArgumentParser('framework')
     parser.add_argument('--offline', action='store_true')
     parser.add_argument('--batch', type=int, default=10, help="Batch size")
