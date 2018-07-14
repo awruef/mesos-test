@@ -194,10 +194,7 @@ def insert_entry(cur, record, framecache, stackcache):
 def insert_record_into_db(line, cur, framecache, stackcache):
     # Parse line out into something we can insert
     entry = make_entry(line)
-    #conn_lock.acquire()
-    #cur = conn.cursor()
-    #insert_entry(cur, entry, framecache, stackcache)
-    #conn.commit()
+    insert_entry(cur, entry, framecache, stackcache)
     #conn_lock.release()
 
 def tmain(q, db, conn_lock, framecache, stackcache):
@@ -268,9 +265,9 @@ def main(args):
         insert_record_into_db(line, cursor, framecache, stackcache)
         #q.put(line)
         cur = cur + 1
-        #if cur % 1000 == 0:
-        #    conn.commit()
-        #    cursor = conn.cursor()
+        if cur % 1000 == 0:
+            conn.commit()
+            cursor = conn.cursor()
         pbar.update(cur)
     conn.commit()
     #q.join()
