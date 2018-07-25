@@ -9,7 +9,7 @@ import subprocess
 import copy
 import time
 import os
-from runner_core.runner import run,run2
+from runner_core.runner import run,run2,run2_asan
 
 #from pymesos import MesosExecutorDriver, Executor, decode_data, encode_data
 import mesos.interface
@@ -40,22 +40,19 @@ class TestCaseExecutor(mesos.interface.Executor):
     def launchTask(self, d, t):
         def run_task(driver,task):
             # Tell everyone we've picked up and are running the task. 
-            #update = Dict()
             update = mesos_pb2.TaskStatus()
             update.task_id.value = task.task_id.value
-            #update.state = 'TASK_RUNNING'
             update.state = mesos_pb2.TASK_RUNNING
-            #update.timestamp = time.time()
             driver.sendStatusUpdate(update)
 
-            #task_data_list = json.loads(decode_data(task.data))
             task_data_list = json.loads(task.data)
             failed_tasks = []
             finished_tasks = []
-            program = None
+            programs = []
             argslist = []
             finished_tasks = []
             write_out = False
+            run_these = []
             for task_data in task_data_list:
                 if task_data.has_key('to_fs'):
                     write_out = True
@@ -91,11 +88,13 @@ class TestCaseExecutor(mesos.interface.Executor):
                     skip = True
 
                 if not skip:
+                    programs.append(program)
                     argslist.append((args, stdindata)) 
                     finished_tasks.append(outdata)
-            
-            if len(argslist) > 0:
-                results = run2(program, argslist)
+           
+            runthese = zip(programs,argslist)
+            if len(runthese) > 0:
+                results = run2_asan(runthese)
             else:
                 results = []
 
@@ -111,14 +110,9 @@ class TestCaseExecutor(mesos.interface.Executor):
                     of.close()
                     subprocess.call(['/bin/gzip', "-f", "{0}-{1}.xml".format(a,b)])
              
-            #update = Dict()
             update = mesos_pb2.TaskStatus()
             update.task_id.value = task.task_id.value
-            #update.state = 'TASK_FINISHED'
             update.state = mesos_pb2.TASK_FINISHED
-            #update.state = 'TASK_FINISHED'
-            #update.timestamp = time.time()
-            #update.data = encode_data(json.dumps(finished_tasks))
             update.data = json.dumps(finished_tasks)
             driver.sendStatusUpdate(update)
 
@@ -150,5 +144,3 @@ if __name__ == "__main__":
     else:
         driver = MesosExecutorDriver(TestCaseExecutor())
         sys.exit(0 if driver.run() == mesos_pb2.DRIVER_STOPPED else 1)
-        #driver = MesosExecutorDriver(TestCaseExecutor(), use_addict=True)
-        #driver.run()

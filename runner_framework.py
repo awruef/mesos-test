@@ -238,12 +238,7 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                 
                 task.task_id.value = str(tid)
                 task.slave_id.value = offer.slave_id.value
-                #task = Dict()
-                #task_id = str(tid)  
-                #task.task_id.value = task_id 
-                #task.agent_id.value = offer.agent_id.value
                 task.name = "task %d" % tid
-                #task.executor = self.executor
 
                 task_data_list = []
                 units = []
