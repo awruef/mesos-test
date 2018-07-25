@@ -1,9 +1,19 @@
 import subprocess
 import tempfile
 import shutil
+import glob
 import stat
 import os
 import xml.etree.ElementTree as ET
+
+def stack_from_asan_log(data):
+    stack = []
+    for line in data.split("\n"):
+        k = line.find("#")
+        if k != -1:
+            k = line.find("in", k)
+            stack.append(line[k+2:].rstrip())
+    return stack
 
 def stack_frame_from_xml(xml_stack):
     st = []
@@ -72,6 +82,86 @@ def stack_from_xml(data):
             return None
         else:
             return errors[ekeys[-1]]
+
+def run2_asan(run_tasks):
+    """
+    Take a program and a list of arguments and stdins, run them 
+    """
+    tempdir = tempfile.mkdtemp()
+    cmdlines = []
+    idx_map = {}
+    idx = 0
+
+    for (program,(arguments,stdin_f)) in run_tasks:
+        real_program = program
+        if program[:7] == "file://":
+            p = program[7:]
+            pbase = os.path.basename(p)
+            shutil.copy(p, "{0}/{1}".format(tempdir, pbase))
+            real_program = "/sandbox/{}".format(pbase)
+        converted_arguments = []
+        for a in arguments:
+            if a[:7] == "file://":
+                b = a[7:]
+                bbase = os.path.basename(b)
+                shutil.copy(b, "{0}/{1}{2}".format(tempdir, bbase, idx))
+                converted_arguments.append("/sandbox/{1}{2}".format(bbase, idx))
+            else:
+                converted_arguments.append(a)
+
+        if stdin_f != None:
+            if stdin_f[:7] == "file://":
+                b = stdin_f[7:]
+                bbase = os.path.basename(b)
+                shutil.copy(b, "{0}/{1}{2}".format(tempdir, bbase, idx))
+                stdin_f = "/sandbox/{0}{1}".format(bbase, idx)
+        exec_c = []
+        logname = "/sandbox/out{i}".format(i=idx)
+        exec_c.append(real_program)
+        for a in converted_arguments:
+            exec_c.append(a)
+  
+        cmd = " ".join(exec_c)
+        if stdin_f != None:
+            cmd = "{command} < {stdinput}".format(command=cmd, stdinput=stdin_f)
+        idx_map[idx] = cmd
+        env = "ASAN_OPTIONS=detect_leaks=false,log_path={log}".format(log=logname)
+        timeout_cmd = "{e} timeout 5m {c}".format(e=env,c=cmd)
+        cmdlines.append(timeout_cmd) 
+        idx = idx + 1
+    
+    runsh = open("{}/run.sh".format(tempdir), "w")
+    runsh.write("#!/bin/bash\n")
+    for l in cmdlines:
+        runsh.write("{}\n".format(l))
+    runsh.write("exit 0\n")
+    runsh.close()
+    os.chmod("{}/run.sh".format(tempdir), stat.S_IREAD|stat.S_IEXEC)
+
+    docker_cmdline = ["docker", "run", "--rm", "--user", "1000", "-m", "1024m"]
+    docker_cmdline.append("-v")
+    docker_cmdline.append("{}:/sandbox".format(tempdir))
+    docker_cmdline.append("ubuntu:16.04")
+    docker_cmdline.append("/sandbox/run.sh") 
+    while True:
+        null_out = open('/dev/null', 'w')
+        result = subprocess.call(docker_cmdline, stdout=null_out, stderr=null_out)
+        if result == 0:
+            break
+   
+    # Gather up all the produced ASAN files and return them
+    datas = {}
+    for i in range(0, idx):
+        u = glob.glob("{tdir}/out{idx}.*".format(tdir=tempdir,idx=i))
+        if len(u) > 0:
+            if os.path.exists(u[0]):
+                data = open(u[0], 'r').read()
+            else:
+                data = ""
+            datas[idx_map[i]] = data
+
+    shutil.rmtree(tempdir)
+    return datas
 
 def run2(program, arguments_list):
     """
@@ -227,7 +317,16 @@ def run(program, arguments, stdin_f=None):
     return data
 
 if __name__ == '__main__':
+    programs = []
+    programs.append('file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/asan_bins/2ea53e003163338a403d5afbb2046cafb8f3abe9/bin/c++filt')
+    programs.append('file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/asan_bins/2ea53e003163338a403d5afbb2046cafb8f3abe9/bin/c++filt')
+    inputs = []
+    inputs.append(([],'file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/2/outdir/crashes/id:000541,sig:11,src:007824,op:ext_AO,pos:38'))
+    inputs.append(([],'file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/2/outdir/crashes/id:000543,sig:11,src:007835,op:ext_AO,pos:38'))
+    tasks = zip(programs,inputs)
+    rv = run2_asan(tasks)
+    print rv
     # Some tests. 
-    rv = run("file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/bins/eee926f28e8745dcd03adcb1113f3e4a7b79b1e5/bin/c++filt", [], "file:///home//andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000417,sig:11,src:005525,op:havoc,rep:8")
-    rv = run2("file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/bins/eee926f28e8745dcd03adcb1113f3e4a7b79b1e5/bin/c++filt", [([], "file:///home//andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000417,sig:11,src:005525,op:havoc,rep:8"),([],"file:///home//andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000410,sig:11,src:005215,op:arith8,pos:29,val:-21"),([],"file:///home//andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000413,sig:11,src:005294,op:havoc,rep:4")])
+    #rv = run("file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/bins/eee926f28e8745dcd03adcb1113f3e4a7b79b1e5/bin/c++filt", [], "file:///home//andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000417,sig:11,src:005525,op:havoc,rep:8")
+    #rv = run2("file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/bins/eee926f28e8745dcd03adcb1113f3e4a7b79b1e5/bin/c++filt", [([], "file:///home//andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000417,sig:11,src:005525,op:havoc,rep:8"),([],"file:///home//andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000410,sig:11,src:005215,op:arith8,pos:29,val:-21"),([],"file:///home//andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/8/outdir/crashes/id:000413,sig:11,src:005294,op:havoc,rep:4")])
     #print rv
