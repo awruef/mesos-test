@@ -6,6 +6,7 @@ import copy
 import sys
 import os
 
+from runner_core.runner import stack_from_asan_log
 from threading import Thread, Lock
 import mesos.interface
 from mesos.interface import mesos_pb2
@@ -15,22 +16,60 @@ class Db(object):
     def __init__(self, dbname):
         self.dbname = dbname
 
-    def acquire(self):
-        pass
-
-    def release(self):
-        pass
-
     def get_db(self):
         return self.dbname
 
+def insert_stack(cur, stack):
+    ls = stack
+    ls.reverse()
+    first = True
+    prev_id = None
+    for l in ls: 
+        # Insert into frames first. 
+        cur.execute("INSERT OR IGNORE INTO frames(framedata) VALUES(\"{0}\");".format(l))
+        frame_id = None
+        cur.execute("SELECT id FROM frames WHERE framedata == \"{f}\";".format(f=l))
+        r = cur.fetchall()
+        frame_id = r[0][0]
+
+        # Do the lookup for the value we just inserted 
+        if first:
+            first = False
+            #prev_id = stackcache.get((frame_id,None))
+            prev_id = None
+            cur.execute("SELECT id FROM stack WHERE frame == {} AND next IS NULL;".format(frame_id))
+            r = cur.fetchall()
+            if len(r) > 0:
+                prev_id = r[0][0]
+
+            if prev_id == None:
+                cur.execute("INSERT INTO stack(frame) VALUES({0});".format(frame_id))
+                cur.execute("SELECT id FROM stack WHERE frame == {} AND next IS NULL;".format(frame_id))
+                r = cur.fetchall()
+                prev_id = r[0][0]
+                assert prev_id != None
+        else:
+            cur.execute("SELECT id FROM stack WHERE frame == {f} AND next == {n};".format(f=frame_id,n=prev_id))
+            q = cur.fetchall()
+            res = None
+            if len(q) > 0:
+                res = q[0][0]
+
+            if res == None:
+                cur.execute("INSERT INTO stack(frame,next) VALUES({0},{1});".format(frame_id,prev_id))
+                cur.execute("SELECT id FROM stack WHERE frame == {f} AND next == {n};".format(f=frame_id,n=prev_id))
+                q = cur.fetchall()
+                prev_id = q[0][0]
+                assert prev_id != None
+            else:
+                prev_id = res
+    return prev_id
+
 def get_tasks_size(database):
-    database.acquire()
     db = sqlite3.connect(database.get_db())
     c = db.cursor()
     c.execute("select count(*) from results where vg_status == \"NOTRUN\";")
     r = c.fetchone()[0]
-    database.release()
     return r
 
 def get_tasks(database):
@@ -39,15 +78,13 @@ def get_tasks(database):
     inputlist format: filename,stdin
     """
     results = [] 
-    database.acquire()
     db = sqlite3.connect(database.get_db())
     c = db.cursor()
-    c.execute("select * from results where vg_status == \"NOTRUN\" LIMIT 5;")
+    c.execute("select * from results where vg_status == \"NOTRUN\" LIMIT 5000;")
     res = c.fetchall()
     for r in res:
         c.execute("update results set vg_status = \"RUNNING\" where id == {i};".format(i=r[0]))
     db.commit()
-    database.release()
     for r in res:
         taskid = r[0]
         program = r[2]
@@ -217,9 +254,16 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                     taskid = result['taskid']
                     output = result['stack']
                     status = "NOCRASH"
+                    stack = []
                     if len(output) > 0:
                         status = "CRASH"
+                        stack = stack_from_asan_log(output)
+                    print "Task {t} result {r}".format(t=taskid,r=status)
+                    print "Output: %s" % output
                     cur.execute("update results set vg_status = \"{s}\" where id == {i};".format(s=status,i=taskid))
+                    if len(stack) > 0:
+                        stack_id = insert_stack(cur, stack)
+                        cur.execute("update results set vg_stack = {sid} where id == {i};".format(sid=stack_id,i=taskid))
                     self.results = self.results + 1
                     self.outstanding = self.outstanding - 1
                 db.commit() 
@@ -288,7 +332,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('framework')
     parser.add_argument('--offline', action='store_true')
-    parser.add_argument('--batch', type=int, default=10, help="Batch size")
+    parser.add_argument('--batch', type=int, default=100, help="Batch size")
     parser.add_argument('database', type=str, help="Database")
     parser.add_argument('controller', type=str, help="Controller URI")
     args = parser.parse_args()
