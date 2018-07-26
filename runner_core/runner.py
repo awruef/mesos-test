@@ -125,7 +125,7 @@ def run2_asan(run_tasks):
         if stdin_f != None:
             cmd = "{command} < {stdinput}".format(command=cmd, stdinput=stdin_f)
         idx_map[idx] = outdata
-        env = "ASAN_OPTIONS=detect_leaks=false,replace_str=false,log_path={log}".format(log=logname)
+        env = "UBSAN_OPTIONS=print_stacktrace=1 ASAN_OPTIONS=detect_leaks=false,replace_str=false,log_path={log}".format(log=logname)
         timeout_cmd = "{e} timeout 5m {c}".format(e=env,c=cmd)
         cmdlines.append(timeout_cmd) 
         idx = idx + 1
