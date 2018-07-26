@@ -92,7 +92,7 @@ def run2_asan(run_tasks):
     idx_map = {}
     idx = 0
 
-    for (program,(arguments,stdin_f)) in run_tasks:
+    for (program,(arguments,stdin_f),outdata) in run_tasks:
         real_program = program
         if program[:7] == "file://":
             p = program[7:]
@@ -124,8 +124,8 @@ def run2_asan(run_tasks):
         cmd = " ".join(exec_c)
         if stdin_f != None:
             cmd = "{command} < {stdinput}".format(command=cmd, stdinput=stdin_f)
-        idx_map[idx] = cmd
-        env = "ASAN_OPTIONS=detect_leaks=false,log_path={log}".format(log=logname)
+        idx_map[idx] = outdata
+        env = "ASAN_OPTIONS=detect_leaks=false,replace_str=false,log_path={log}".format(log=logname)
         timeout_cmd = "{e} timeout 5m {c}".format(e=env,c=cmd)
         cmdlines.append(timeout_cmd) 
         idx = idx + 1
@@ -150,15 +150,16 @@ def run2_asan(run_tasks):
             break
    
     # Gather up all the produced ASAN files and return them
-    datas = {}
-    for i in range(0, idx):
+    datas = []
+    for i in range(0, len(run_tasks)):
         u = glob.glob("{tdir}/out{idx}.*".format(tdir=tempdir,idx=i))
         if len(u) > 0:
-            if os.path.exists(u[0]):
-                data = open(u[0], 'r').read()
-            else:
-                data = ""
-            datas[idx_map[i]] = data
+            data = open(u[0], 'r').read()
+        else:
+            data = ""
+        o = idx_map[i]
+        o['stack'] = data
+        datas.append(o)
 
     shutil.rmtree(tempdir)
     return datas
@@ -323,7 +324,10 @@ if __name__ == '__main__':
     inputs = []
     inputs.append(([],'file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/2/outdir/crashes/id:000541,sig:11,src:007824,op:ext_AO,pos:38'))
     inputs.append(([],'file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/2/outdir/crashes/id:000543,sig:11,src:007835,op:ext_AO,pos:38'))
-    tasks = zip(programs,inputs)
+    stuff = []
+    stuff.append({})
+    stuff.append({})
+    tasks = zip(programs,inputs,stuff)
     rv = run2_asan(tasks)
     print rv
     # Some tests. 

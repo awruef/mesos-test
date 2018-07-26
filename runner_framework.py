@@ -1,99 +1,66 @@
 #!/usr/bin/env python2.7
 import argparse 
-import zlib
-import base64
-import getpass
-import socket
-import signal
-import time
+import sqlite3
 import json 
 import copy
-import csv
 import sys
 import os
-import hashlib
 
 from threading import Thread, Lock
-from runner_core.runner import stack_from_xml
-#from pymesos import MesosSchedulerDriver, Scheduler, decode_data, encode_data
 import mesos.interface
 from mesos.interface import mesos_pb2
 from mesos.scheduler import MesosSchedulerDriver
-from addict import Dict
 
-def get_tasks_size(data_dir):
-    proglist = csv.reader(open('{}/proglist.csv'.format(data_dir), 'r'))
-    inputlist = csv.reader(open('{}/inputlist.csv'.format(data_dir), 'r'))
-    first = True
-    inputs = []
-    programs = []
-    for p in proglist:
-        if first == True:
-            first = False
-        else:
-            programs.append(p)
-    first = True
-    for i in inputlist:
-        if first == True:
-            first = False
-        else:
-            inputs.append(i)
-    
-    return len(inputs)*len(programs)
+class Db(object):
+    def __init__(self, dbname):
+        self.dbname = dbname
 
-def get_tasks(data_dir, program_idx):
+    def acquire(self):
+        pass
+
+    def release(self):
+        pass
+
+    def get_db(self):
+        return self.dbname
+
+def get_tasks_size(database):
+    database.acquire()
+    db = sqlite3.connect(database.get_db())
+    c = db.cursor()
+    c.execute("select count(*) from results where vg_status == \"NOTRUN\";")
+    r = c.fetchone()[0]
+    database.release()
+    return r
+
+def get_tasks(database):
     """
     proglist format : id,program,args
     inputlist format: filename,stdin
     """
-    results = []
-    proglist = csv.reader(open('{}/proglist.csv'.format(data_dir), 'r'))
-    inputlist = csv.reader(open('{}/inputlist.csv'.format(data_dir), 'r'))
-    taskid = 0
-    first = True
-    inputs = []
-    programs = []
-    for p in proglist:
-        if first == True:
-            first = False
-        else:
-            programs.append(p)
-    first = True
-    for i in inputlist:
-        if first == True:
-            first = False
-        else:
-            inputs.append(i)
-
-    if program_idx >= len(programs):
-        return []
-
-    p = programs[program_idx]
-    program_id = p[0]
-    program = p[1]
-    if program[0] != os.path.sep:
-        program = os.path.abspath("{0}/{1}".format(data_dir,program))
-
-    if len(p[2]) > 0:
-        program_args = p[2].split(" ")
-    else:
-        program_args = []
-    for i in inputs:
-        input_filename = i[0]
-        if input_filename[0] != os.path.sep:
-            input_filename = os.path.abspath("{0}/{1}".format(data_dir,input_filename))
-        do_read = i[1]
-        if do_read == 'False':
-            do_read = False
-        else:
+    results = [] 
+    database.acquire()
+    db = sqlite3.connect(database.get_db())
+    c = db.cursor()
+    c.execute("select * from results where vg_status == \"NOTRUN\" LIMIT 5;")
+    res = c.fetchall()
+    for r in res:
+        c.execute("update results set vg_status = \"RUNNING\" where id == {i};".format(i=r[0]))
+    db.commit()
+    database.release()
+    for r in res:
+        taskid = r[0]
+        program = r[2]
+        program_args = r[8]
+        input_filename = r[3]
+        do_read = False
+        if r[7] == 1:
             do_read = True
-        is_stdin = i[2]
-        if is_stdin == 'False':
-            is_stdin = False
-        else:
+        is_stdin = False
+        if r[6] == 1:
             is_stdin = True
+        program_id = r[1]
         results.append((taskid,program,program_args,input_filename,do_read,is_stdin,program_id))
-        taskid = taskid + 1
     return results
 
 def make_task_data(workunit):
@@ -108,52 +75,24 @@ def make_task_data(workunit):
     return task_data 
 
 class TestCaseScheduler(mesos.interface.Scheduler):
-    def __init__(self, data_dir, output, executor, batch):
+    def __init__(self, database, executor, batch):
         self.tasks = []
-        self.taskMax = get_tasks_size(data_dir)
-        self.data_dir = data_dir
-        self.cur_program_idx = 0
         self.lock = Lock()
+        self.db = Db(database)
+        self.cur_program_idx = 0
         self.executor = executor
         self.tasksLaunched = 0
         self.taskData = {}
         self.batchSize = batch
         self.results = 0
         self.outstanding = 0
-        self.done = set()
-        u = open(output, 'r')
-        v = csv.reader(u)
-        v.next()
-        for l in v:        
-            hsh = l[0]
-            f = l[1]
-            if f[:7] == "file://":
-                f = f[7:]
-            q = "%s-%s" % (hsh,f)
-            id_ = int(hashlib.md5("%s-%s" % (hsh,f)).hexdigest(), 16)
-            self.done.add(id_)
-        u.close()
-        self.outfile = open(output, 'a')
-        self.outwriter = csv.writer(self.outfile)
-        self.outwriter.writerow(["program_hash","input_file","result"])
-        while self.results != self.taskMax:
-            newTasks = get_tasks(self.data_dir, self.cur_program_idx)
-            if len(newTasks) > 0:
-                self.cur_program_idx = self.cur_program_idx + 1
-            filteredTasks = []
-            for t in newTasks:
-                f = t[3]
-                ph = t[6]
-                q = "%s-%s" % (ph,f)
-                id_ = int(hashlib.md5(q).hexdigest(), 16)
-                if not id_ in self.done:
-                    filteredTasks.append(t)
-                else:
-                    self.results = self.results + 1
-            if len(filteredTasks) > 0:
-                self.tasks = filteredTasks
-                break
- 
+        # Forget anything that was in flight the last time and re-run it. 
+        db = sqlite3.connect(self.db.get_db())
+        c = db.cursor()
+        c.execute("update results set vg_status = \"NOTRUN\" where vg_status == \"RUNNING\";")
+        db.commit()
+        self.taskMax = get_tasks_size(self.db)
+
     def _finished(self, state):
         return state == mesos_pb2.TASK_FINISHED
 
@@ -181,6 +120,7 @@ class TestCaseScheduler(mesos.interface.Scheduler):
     def resourceOffers(self, driver, offers):
         self.lock.acquire() 
 
+        print "Progress: %d(%d)/%d" % (self.results,self.outstanding,self.taskMax)
         if self.results + self.outstanding >= self.taskMax:
             print "No need for more!"
             self.lock.release()
@@ -188,28 +128,9 @@ class TestCaseScheduler(mesos.interface.Scheduler):
 
         if len(self.tasks) == 0:
             # Try to get a new set of tasks to do. 
-            while self.results < self.taskMax:
-                newTasks = get_tasks(self.data_dir, self.cur_program_idx)
-                if len(newTasks) > 0:
-                    self.cur_program_idx = self.cur_program_idx + 1
-                filteredTasks = []
-                for t in newTasks:
-                    f = t[3]
-                    ph = t[6]
-                    q = "%s-%s" % (ph,f)
-                    id_ = int(hashlib.md5(q).hexdigest(), 16)
-                    if not id_ in self.done:
-                        filteredTasks.append(t)
-                    else:
-                        self.results = self.results + 1
-                if len(filteredTasks) > 0:
-                    self.tasks = filteredTasks
-                    break
+            self.tasks = get_tasks(self.db) 
          
-        print "Progress: %d/%d" % (self.results,self.taskMax)
         for offer in offers:
-            #offerCpus = self.getResource(offer.resources, 'cpus')
-            #offerMem = self.getResource(offer.resources, 'mem')
             offerCpus = 0
             offerMem = 0
             for resource in offer.resources:
@@ -225,7 +146,7 @@ class TestCaseScheduler(mesos.interface.Scheduler):
             #print "Received offer %s with cpus: %s and mem: %s" \
             #      % (offer.id.value, offerCpus, offerMem)
             
-            while len(self.tasks) > 0 and remainingCpus >= 1 and remainingMem >= 512:
+            while len(self.tasks) > 0 and remainingCpus >= 1 and remainingMem >= 1024:
                 # Schedule a task. 
                 tid = self.tasksLaunched
                 self.tasksLaunched += 1
@@ -263,7 +184,7 @@ class TestCaseScheduler(mesos.interface.Scheduler):
                 cpus.scalar.value = 1
                 mem.name = "mem"
                 mem.type = mesos_pb2.Value.SCALAR
-                mem.scalar.value = 512
+                mem.scalar.value = 1024
                 #task.resources = [
                 #    dict(name='cpus', type='SCALAR', scalar={'value': 1}),
                 #    dict(name='mem', type='SCALAR', scalar={'value': 512}),
@@ -274,7 +195,7 @@ class TestCaseScheduler(mesos.interface.Scheduler):
 
                 # This is how much we used. 
                 remainingCpus = remainingCpus - 1
-                remainingMem = remainingMem - 512
+                remainingMem = remainingMem - 1024
             
             # Propose to launch the tasks. 
             operation = mesos_pb2.Offer.Operation()
@@ -288,19 +209,24 @@ class TestCaseScheduler(mesos.interface.Scheduler):
         def worker(self,driver,update):
             # First case, maybe the task is finished? 
             if self._finished(update.state):
-                #results = json.loads(decode_data(update.data))
                 results = json.loads(update.data)
+                self.lock.acquire()
+                db = sqlite3.connect(self.db.get_db())
+                cur = db.cursor()
                 for result in results:
-                    self.lock.acquire()
-                    writedata = base64.b64encode(zlib.compress(result['stack']))
-                    self.outwriter.writerow([result['hash'], result['inputfile'], writedata])
-                    #self.results.append(update.task_id.value)
+                    taskid = result['taskid']
+                    output = result['stack']
+                    status = "NOCRASH"
+                    if len(output) > 0:
+                        status = "CRASH"
+                    cur.execute("update results set vg_status = \"{s}\" where id == {i};".format(s=status,i=taskid))
                     self.results = self.results + 1
                     self.outstanding = self.outstanding - 1
-                    self.lock.release()
-        
-            # If the task was killed or was lost or failed, we should re-queue it.
-            if self._failed(update.state):
+                db.commit() 
+                self.lock.release()
+            elif self._failed(update.state):
+                print "Task failed, re-queuing"
+                # If the task was killed or was lost or failed, we should re-queue it.
                 units = self.taskData[update.task_id.value]
 
                 self.lock.acquire()
@@ -325,40 +251,6 @@ class TestCaseScheduler(mesos.interface.Scheduler):
         return
 
 def main(args):
-    if args.offline:
-        # Get all the tasks. 
-        i = 0
-        l = []
-        while True:
-            newTasks = get_tasks(args.data_dir, i)
-            if len(newTasks) == 0:
-                break
-            l.extend(newTasks)
-            i = i + 1
-
-        # Create JSON blobs for each task, including batch size.
-        of = open(args.output, 'w')
-        while len(l) > 0:
-            task_data_list = []
-            for i in range(0,args.batch):
-                if len(l) == 0:
-                    continue
-
-                workunit = l.pop()
-                task_data = make_task_data(workunit)
-                task_data['to_fs'] = 0
-                task_data_list.append(task_data)
-
-            if len(task_data_list) == 0:
-                continue
-
-            data = encode_data(json.dumps(task_data_list))
-	
-            # Write the JSON blob to the output file, one per line. 
-            of.write("{}\n".format(base64.b64encode(zlib.compress(data))))
-
-        of.close()
-        return 0
     # Get the path to our executor
     executor_path = os.path.abspath("./executor")
     # Then, boot up all the Mesos crap and get us registered with the framework. 
@@ -384,7 +276,7 @@ def main(args):
     framework.checkpoint = True
     framework.principal = "test-case-repeater"
 
-    driver = MesosSchedulerDriver(TestCaseScheduler(args.data_dir, args.output, executor, args.batch), framework, args.controller, 1)
+    driver = MesosSchedulerDriver(TestCaseScheduler(args.database, executor, args.batch), framework, args.controller, 1)
     status = None
     if driver.run() == mesos_pb2.DRIVER_STOPPED:
         status = 0
@@ -394,12 +286,10 @@ def main(args):
     return status
 
 if __name__ == '__main__':
-    csv.field_size_limit(100000000)
     parser = argparse.ArgumentParser('framework')
     parser.add_argument('--offline', action='store_true')
     parser.add_argument('--batch', type=int, default=10, help="Batch size")
-    parser.add_argument('data_dir', type=str, help="Data directory")
+    parser.add_argument('database', type=str, help="Database")
     parser.add_argument('controller', type=str, help="Controller URI")
-    parser.add_argument('output', type=str, help="Output file")
     args = parser.parse_args()
     sys.exit(main(args))

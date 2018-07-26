@@ -47,20 +47,18 @@ class TestCaseExecutor(mesos.interface.Executor):
 
             task_data_list = json.loads(task.data)
             failed_tasks = []
-            finished_tasks = []
             programs = []
             argslist = []
             finished_tasks = []
             write_out = False
             run_these = []
             for task_data in task_data_list:
-                if task_data.has_key('to_fs'):
-                    write_out = True
                 program = task_data['program']
                 args = task_data['program_args']
                 indata = task_data['input_filename']
                 is_stdin = task_data['stdin']
                 do_read = task_data['do_read']
+                task_id = task_data['taskid']
 
                 if do_read:
                     indata = open(indata, 'r').read()
@@ -77,43 +75,23 @@ class TestCaseExecutor(mesos.interface.Executor):
                 outdata = {}
                 outdata['hash'] = task_data['program_id']
                 outdata['inputfile'] = task_data['input_filename']
+                outdata['taskid'] = task_id
                 outdata['stack'] = ""
-                a = outdata['inputfile']
-                b = outdata['hash']
-                if a[:7] == "file://":
-                    a = a[7:]
-                nm = "{0}-{1}.xml.gz".format(a,b)
-                skip = False
-                if write_out and not os.path.isfile(nm):
-                    skip = True
 
-                if not skip:
-                    programs.append(program)
-                    argslist.append((args, stdindata)) 
-                    finished_tasks.append(outdata)
+                programs.append(program)
+                argslist.append((args, stdindata)) 
+                finished_tasks.append(outdata)
            
-            runthese = zip(programs,argslist)
+            runthese = zip(programs,argslist,finished_tasks)
             if len(runthese) > 0:
                 results = run2_asan(runthese)
             else:
                 results = []
 
-            for i in range(0, len(results)):
-                finished_tasks[i]['stack'] = results[i]
-                if write_out:
-                    a = finished_tasks[i]['inputfile']
-                    b = finished_tasks[i]['hash']
-                    if a[:7] == "file://":
-                        a = a[7:]
-                    of = open("{0}-{1}.xml".format(a,b), 'w')
-                    of.write(results[i])
-                    of.close()
-                    subprocess.call(['/bin/gzip', "-f", "{0}-{1}.xml".format(a,b)])
-             
             update = mesos_pb2.TaskStatus()
             update.task_id.value = task.task_id.value
             update.state = mesos_pb2.TASK_FINISHED
-            update.data = json.dumps(finished_tasks)
+            update.data = json.dumps(results)
             driver.sendStatusUpdate(update)
 
         thread = threading.Thread(target=run_task,args=(d,t))
