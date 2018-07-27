@@ -80,7 +80,7 @@ def get_tasks(database):
     results = [] 
     db = sqlite3.connect(database.get_db())
     c = db.cursor()
-    c.execute("select * from results where vg_status == \"NOTRUN\" LIMIT 5000;")
+    c.execute("select * from results where vg_status == \"NOTRUN\" LIMIT 50000;")
     res = c.fetchall()
     for r in res:
         c.execute("update results set vg_status = \"RUNNING\" where id == {i};".format(i=r[0]))
@@ -332,7 +332,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('framework')
     parser.add_argument('--offline', action='store_true')
-    parser.add_argument('--batch', type=int, default=100, help="Batch size")
+    parser.add_argument('--batch', type=int, default=1000, help="Batch size")
     parser.add_argument('database', type=str, help="Database")
     parser.add_argument('controller', type=str, help="Controller URI")
     args = parser.parse_args()
