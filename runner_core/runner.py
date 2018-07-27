@@ -132,12 +132,15 @@ def run2_asan(run_tasks):
     
     runsh = open("{}/run.sh".format(tempdir), "w")
     runsh.write("#!/bin/bash\n")
+    runsh.write("echo \"started\" > /sandbox/started\n")
     for l in cmdlines:
         runsh.write("{}\n".format(l))
+    runsh.write("echo \"finished\" > /sandbox/finished\n")
     runsh.write("exit 0\n")
     runsh.close()
     os.chmod("{}/run.sh".format(tempdir), stat.S_IREAD|stat.S_IEXEC)
 
+    subprocess.call(["/bin/sync"])
     docker_cmdline = ["docker", "run", "--rm", "--user", "1000", "-m", "1024m"]
     docker_cmdline.append("-v")
     docker_cmdline.append("{}:/sandbox".format(tempdir))
@@ -147,7 +150,24 @@ def run2_asan(run_tasks):
         null_out = open('/dev/null', 'w')
         result = subprocess.call(docker_cmdline, stdout=null_out, stderr=null_out)
         if result == 0:
-            break
+            if os.path.exists("{}/started".format(tempdir)):
+                r = open("{}/started".format(tempdir), "r").read()
+                if r.find("started") != -1:
+                    result = 0
+                else:
+                    result = 1
+            else:
+                result = 1
+            if os.path.exists("{}/finished".format(tempdir)):
+                r = open("{}/finished".format(tempdir), "r").read()
+                if r.find("finished") != -1:
+                    result = 0
+                else:
+                    result = 1
+            else:
+                result = 1
+            if result == 0:
+                break
    
     # Gather up all the produced ASAN files and return them
     datas = []
