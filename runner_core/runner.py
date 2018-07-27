@@ -140,6 +140,8 @@ def run2_asan(run_tasks):
     for l in cmdlines:
         runsh.write("{}\n".format(l))
     runsh.write("/bin/sync\n")
+    for l in cmdlines:
+        runsh.write("{}\n".format(l))
     runsh.write("exit 0\n")
     runsh.close()
     del runsh
@@ -158,6 +160,24 @@ def run2_asan(run_tasks):
         result = subprocess.call(docker_cmdline)#, stdout=null_out, stderr=null_out)
         if result == 0:
             break
+            if os.path.exists("{}/started".format(tempdir)):
+                r = open("{}/started".format(tempdir), "r").read()
+                if r.find("started") != -1:
+                    result = 0
+                else:
+                    result = 1
+            else:
+                result = 1
+            if os.path.exists("{}/finished".format(tempdir)):
+                r = open("{}/finished".format(tempdir), "r").read()
+                if r.find("finished") != -1:
+                    result = 0
+                else:
+                    result = 1
+            else:
+                result = 1
+            if result == 0:
+                break
     """
    
     subprocess.call(["/bin/sync"])
