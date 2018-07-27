@@ -97,15 +97,17 @@ def run2_asan(run_tasks):
         if program[:7] == "file://":
             p = program[7:]
             pbase = os.path.basename(p)
-            shutil.copy(p, "{0}/{1}".format(tempdir, pbase))
-            real_program = "/sandbox/{}".format(pbase)
+            #shutil.copy(p, "{0}/{1}".format(tempdir, pbase))
+            #real_program = "/sandbox/{}".format(pbase)
+            real_program = p
         converted_arguments = []
         for a in arguments:
             if a[:7] == "file://":
                 b = a[7:]
                 bbase = os.path.basename(b)
                 shutil.copy(b, "{0}/{1}{2}".format(tempdir, bbase, idx))
-                converted_arguments.append("/sandbox/{1}{2}".format(bbase, idx))
+                #converted_arguments.append("/sandbox/{1}{2}".format(bbase, idx))
+                converted_arguments.append(b)
             else:
                 converted_arguments.append(a)
 
@@ -114,9 +116,11 @@ def run2_asan(run_tasks):
                 b = stdin_f[7:]
                 bbase = os.path.basename(b)
                 shutil.copy(b, "{0}/{1}{2}".format(tempdir, bbase, idx))
-                stdin_f = "/sandbox/{0}{1}".format(bbase, idx)
+                #stdin_f = "/sandbox/{0}{1}".format(bbase, idx)
+                stdin_f = b
         exec_c = []
-        logname = "/sandbox/out{i}".format(i=idx)
+        #logname = "/sandbox/out{i}".format(i=idx)
+        logname = "{t}/out{i}".format(t=tempdir,i=idx)
         exec_c.append(real_program)
         for a in converted_arguments:
             exec_c.append(a)
@@ -132,12 +136,18 @@ def run2_asan(run_tasks):
     
     runsh = open("{}/run.sh".format(tempdir), "w")
     runsh.write("#!/bin/bash\n")
+    runsh.write("/bin/sync\n")
     for l in cmdlines:
         runsh.write("{}\n".format(l))
+    runsh.write("/bin/sync\n")
     runsh.write("exit 0\n")
     runsh.close()
+    del runsh
     os.chmod("{}/run.sh".format(tempdir), stat.S_IREAD|stat.S_IEXEC)
 
+    subprocess.call(["/bin/sync", "{}/*".format(tempdir)],shell=True)
+    subprocess.call(["/bin/bash", "{}/run.sh".format(tempdir)])
+    """
     docker_cmdline = ["docker", "run", "--rm", "--user", "1000", "-m", "1024m"]
     docker_cmdline.append("-v")
     docker_cmdline.append("{}:/sandbox".format(tempdir))
@@ -145,10 +155,12 @@ def run2_asan(run_tasks):
     docker_cmdline.append("/sandbox/run.sh") 
     while True:
         null_out = open('/dev/null', 'w')
-        result = subprocess.call(docker_cmdline, stdout=null_out, stderr=null_out)
+        result = subprocess.call(docker_cmdline)#, stdout=null_out, stderr=null_out)
         if result == 0:
             break
+    """
    
+    subprocess.call(["/bin/sync"])
     # Gather up all the produced ASAN files and return them
     datas = []
     for i in range(0, len(run_tasks)):
@@ -319,11 +331,11 @@ def run(program, arguments, stdin_f=None):
 
 if __name__ == '__main__':
     programs = []
-    programs.append('file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/asan_bins/2ea53e003163338a403d5afbb2046cafb8f3abe9/bin/c++filt')
-    programs.append('file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/asan_bins/2ea53e003163338a403d5afbb2046cafb8f3abe9/bin/c++filt')
+    programs.append('file:///home/ubuntu/mesos-test-case-runner/cxxfilt-fuzzing/bins/2ea53e003163338a403d5afbb2046cafb8f3abe9/bin/c++filt')
+    programs.append('file:///home/ubuntu/mesos-test-case-runner/cxxfilt-fuzzing/bins/2ea53e003163338a403d5afbb2046cafb8f3abe9/bin/c++filt')
     inputs = []
-    inputs.append(([],'file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/2/outdir/crashes/id:000541,sig:11,src:007824,op:ext_AO,pos:38'))
-    inputs.append(([],'file:///home/andrew/code/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/2/outdir/crashes/id:000543,sig:11,src:007835,op:ext_AO,pos:38'))
+    inputs.append(([],'file:///home/ubuntu/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/2/outdir/crashes/id:000541,sig:11,src:007824,op:ext_AO,pos:38'))
+    inputs.append(([],'file:///home/ubuntu/mesos-test-case-runner/cxxfilt-fuzzing/inputs/afl/2/outdir/crashes/id:000543,sig:11,src:007835,op:ext_AO,pos:38'))
     stuff = []
     stuff.append({})
     stuff.append({})

@@ -16,8 +16,6 @@ import mesos.interface
 from mesos.interface import mesos_pb2
 from mesos.executor import MesosExecutorDriver
 
-from addict import Dict
-
 class Offline(object):
     def __init__(self, cv):
         self.cv = cv
@@ -84,7 +82,15 @@ class TestCaseExecutor(mesos.interface.Executor):
            
             runthese = zip(programs,argslist,finished_tasks)
             if len(runthese) > 0:
-                results = run2_asan(runthese)
+                try:
+                    results = run2_asan(runthese)
+                except:
+                    update = mesos_pb2.TaskStatus()
+                    update.task_id.value = task.task_id.value
+                    update.state = mesos_pb2.TASK_FAILED
+                    driver.sendStatusUpdate(update)
+                    return
+
             else:
                 results = []
 
